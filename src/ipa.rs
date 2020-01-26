@@ -1,12 +1,16 @@
+use crate::html::Page;
 use memmap::Mmap;
 use serde::Deserialize;
 use serde_cbor::Deserializer;
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, HashSet},
+    convert::Infallible,
     fmt::{Display, Formatter, Result as FmtResult},
     fs::File,
+    io::Result as IoResult,
 };
-use warp::{self, reply::html, Filter, Rejection, Reply};
+use warp::{self, reject::Reject, reply::html, Filter, Rejection, Reply};
 
 #[derive(Debug, Deserialize)]
 pub struct TemplateBorrowed<'a> {
@@ -59,13 +63,15 @@ struct TemplatesInPage {
 }
 */
 
+// Returns a map from title to templates, filtered by the language codes
+// and search string. If the search string is present, returns templates
+// containing transcriptions that contain it; if the list of language codes
+// is present, the language code (argument 1) must be be found in the list.
 fn ipa_search_results<'a, 'b: 'a>(
     deserializer: impl Iterator<Item = serde_cbor::Result<TemplatesInPage<'a>>>,
     search: Option<String>,
-    langs_string: Option<Vec<&'b str>>,
-) -> BTreeMap<&'a str, TemplateBorrowed<'a>> {
-    let langs: Option<HashSet<_>> =
-        langs_string.map(|l| l.into_iter().collect());
+    langs: Option<HashSet<&'b str>>,
+) -> BTreeMap<&'a str, Vec<TemplateBorrowed<'a>>> {
     let ipa_filter = |template: &TemplateBorrowed<'_>| {
         langs
             .as_ref()
@@ -80,35 +86,31 @@ fn ipa_search_results<'a, 'b: 'a>(
             && search
                 .as_ref()
                 .map(|s| {
-                    template
-                        .parameters
-                        .iter()
-                        .skip(1)
-                        .any(|(_k, v)| v.contains(s.as_str()))
+                    template.parameters.iter().skip(1).any(|(k, v)| {
+                        k.bytes().all(|c| c.is_ascii_digit())
+                            && v.contains(s.as_str())
+                    })
                 })
                 .unwrap_or(true)
     };
     deserializer
-        .flat_map(|val| {
+        .filter_map(|val| {
             let TemplatesInPage { title, templates } = val.unwrap();
-            templates
-                .into_iter()
-                .filter(&ipa_filter)
-                .map(move |template| (title, template))
+            let matches: Vec<TemplateBorrowed<'a>> =
+                templates.into_iter().filter(&ipa_filter).collect();
+            if matches.is_empty() {
+                None
+            } else {
+                Some((title, matches))
+            }
         })
         .collect()
 }
 
-#[derive(Deserialize)]
-struct IPASearchParameters {
-    search: Option<String>,
-    langs: Option<String>,
-}
-
 markup::define! {
-    TemplateAndTitle<'a, 'b> (
+    TitleAndTemplates<'a, 'b> (
         title: &'b str,
-        template: TemplateBorrowed<'a>
+        templates: Vec<TemplateBorrowed<'a>>
     ) {
         tr {
             td {
@@ -117,12 +119,17 @@ markup::define! {
                 }
             }
             td {
-                code {
-                    @if let Some(text) = template.text {
-                        {text.to_string()}
+                @for (i, template) in templates.iter().enumerate() {
+                    @if i > 0 {
+                        br;
+                    }
+                    code {
+                        @if let Some(text) = template.text {
+                            {text.to_string()}
 
-                    } else {
-                        {template.to_string()}
+                        } else {
+                            {template.to_string()}
+                        }
                     }
                 }
             }
@@ -130,51 +137,167 @@ markup::define! {
     }
 }
 
-pub fn ipa() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone
-{
-    warp::get()
-        .and(warp::path!("ipa"))
-        .and(warp::query::<IPASearchParameters>())
-        .map(|params| {
-            let file = File::open("cbor/IPA.cbor")
-                .expect("could not open template dump file");
-            let text =
-                unsafe { Mmap::map(&file).expect("could not mmap file") };
-            let IPASearchParameters {
-                search,
-                langs: langs_string,
-            } = params;
-            let langs = langs_string
-                .as_ref()
-                .map(|l| l.split(",").collect::<Vec<_>>());
-            let deserializer =
-                Deserializer::from_slice(&text).into_iter::<TemplatesInPage>();
-            let results = ipa_search_results(deserializer, search, langs);
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IPASearchParameters {
+    search: Option<String>,
+    langs: Option<String>,
+}
 
-            html(format!(
-                r#"
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <title>IPA result test!</title>
-    </head>
-    <body>
-        <table>
-            <tbody>
-                {}
-            </tbody>
-        </table>
-    </body>
-</html>
-"#,
+impl IPASearchParameters {
+    fn validate(&self) -> Result<(), InvalidIPAParameters> {
+        use InvalidIPAParameters::*;
+        if self.search.is_none() && self.langs.is_none() {
+            Err(MissingParameters)
+        } else if self.langs.is_some() && self.langs.as_ref().unwrap().len() < 2
+        {
+            Err(LangsTooShort)
+        } else if self.search.as_deref() == Some("") {
+            Err(SearchEmpty)
+        } else if is_too_long(&self.search) || is_too_long(&self.langs) {
+            Err(TooLong)
+        } else {
+            let mut bad_chars = self.langs.as_ref().map(|l| {
+                l.chars()
+                    .filter(|c| {
+                        !(('a'..='z').contains(c) || *c == '-' || *c == ',')
+                    })
+                    .peekable()
+            });
+            if bad_chars.is_some()
+                && bad_chars.as_mut().unwrap().peek().is_some()
+            {
+                Err(BadLangCharacters(bad_chars.unwrap().collect()))
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum InvalidIPAParameters {
+    MissingParameters,
+    BadLangCharacters(String),
+    TooLong,
+    LangsTooShort,
+    SearchEmpty,
+}
+
+impl Display for InvalidIPAParameters {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        use InvalidIPAParameters::*;
+        match self {
+            MissingParameters => write!(
+                f,
+                r#"At least one query parameter, "search" or "langs", is required. Append one of the following to the URL:
+
+?search=<search text>
+?langs=<language codes separated by ,>
+?search=<search text>&langs=<language codes separated by ,>"#,
+            ),
+            BadLangCharacters(chars) => write!(
+                f,
+                r#"The "langs" parameter contains the following bad characters: {}"#,
+                chars
+            ),
+            TooLong => write!(
+                f,
+                r#"Either "lang" or "search" was too long. The limit is {} bytes."#,
+                MAX_PARAM_LEN
+            ),
+            LangsTooShort => {
+                write!(f, "Langs must be two characters or longer.")
+            }
+            SearchEmpty => {
+                write!(f, r#""search" parameter must not be empty."#)
+            }
+        }
+    }
+}
+
+impl Reject for InvalidIPAParameters {}
+
+const MAX_PARAM_LEN: usize = 256;
+fn is_too_long(param: &Option<String>) -> bool {
+    param
+        .as_ref()
+        .map(|s| s.len() > MAX_PARAM_LEN)
+        .unwrap_or(false)
+}
+
+fn ipa_params(
+) -> impl Filter<Extract = (IPASearchParameters,), Error = Rejection> + Clone {
+    warp::query::<IPASearchParameters>().and_then(
+        |params: IPASearchParameters| {
+            async move {
+                if let Err(e) = params.validate() {
+                    return Err(warp::reject::custom(e));
+                } else {
+                    Ok(params)
+                }
+            }
+        },
+    )
+}
+
+async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
+    let err_txt = if let Some(e) = err.find::<InvalidIPAParameters>() {
+        Cow::Owned(e.to_string())
+    } else if err.find::<warp::reject::InvalidQuery>().is_some() {
+        Cow::Borrowed(
+            r#"Invalid query string; valid parameters are "search" and "langs"."#,
+        )
+    } else {
+        Cow::Borrowed("Unknown error")
+    };
+    Ok(err_txt)
+}
+
+fn mmap_file(path: &str) -> IoResult<Mmap> {
+    let file = File::open(path)?;
+    unsafe { Mmap::map(&file) }
+}
+
+fn do_search(
+    IPASearchParameters {
+        search,
+        langs: langs_string,
+    }: IPASearchParameters,
+) -> impl Reply {
+    let langs = langs_string
+        .as_ref()
+        .map(|l| l.split(',').collect::<HashSet<_>>());
+
+    let text = mmap_file("cbor/IPA.cbor")
+        .expect("could not memory map CBOR stream file");
+
+    let results = ipa_search_results(
+        Deserializer::from_slice(&text).into_iter(),
+        search,
+        langs,
+    );
+
+    html(
+        Page {
+            title: "IPA search result",
+            body: markup::raw(format!(
+                r#"<table><tbody>{}</tbody></table>"#,
                 results
                     .into_iter()
-                    .map(|(title, template)| TemplateAndTitle {
+                    .map(|(title, templates)| TitleAndTemplates {
                         title,
-                        template
+                        templates
                     }
                     .to_string())
                     .collect::<String>()
-            ))
-        })
+            )),
+        }
+        .to_string(),
+    )
+}
+
+pub fn route(
+) -> impl Filter<Extract = (impl Reply,), Error = Infallible> + Clone {
+    ipa_params().map(do_search).recover(handle_rejection)
 }

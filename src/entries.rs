@@ -1,3 +1,4 @@
+use crate::html::Page;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use rlua::{Lua, Result as LuaResult};
@@ -41,22 +42,12 @@ markup::define! {
         find_regex: Option<String>,
         max_length: usize
     ) {
-        {markup::doctype()}
-        html {
-            head {
-                meta[charset="utf-8"];
-                title { "Entry name search results" }
-                link[rel="stylesheet", type="text/css", href="style.css"];
-            }
-            body {
-                #main {
-                    p { { Description { lang, find, find_regex, count: lines.len() } } }
-                    ul[style={format!("column-width: {}ch;", std::cmp::max(max_length, &5))}] {
-                        @for line in lines.iter() {
-                            li {
-                                {WiktionaryLink { page: line, lang: &lang }}
-                            }
-                        }
+        #main {
+            p { { Description { lang, find, find_regex, count: lines.len() } } }
+            ul[style={format!("column-width: {}ch;", std::cmp::max(max_length, &5))}] {
+                @for line in lines.iter() {
+                    li {
+                        {WiktionaryLink { page: line, lang: &lang }}
                     }
                 }
             }
@@ -197,12 +188,15 @@ fn entry_list(
         match lines {
             Ok(lines) => html(format!(
                 "{}",
-                EntryLinks {
-                    lines,
-                    lang: language_code,
-                    find,
-                    find_regex: find_regex.map(|r| r.as_str().to_string()),
-                    max_length,
+                Page {
+                    title: "Entry name search results",
+                    body: EntryLinks {
+                        lines,
+                        lang: language_code,
+                        find,
+                        find_regex: find_regex.map(|r| r.as_str().to_string()),
+                        max_length,
+                    }
                 }
             )),
             Err(e) => html(format!("Error reading {}: {}.", &filename, e)),
@@ -212,10 +206,9 @@ fn entry_list(
     }
 }
 
-pub fn entries(
-) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
-    warp::get()
-        .and(warp::path!("entries" / String))
+pub fn route() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone
+{
+    warp::filters::path::param()
         .and(warp::query::<EntryParameters>())
         .map(entry_list)
 }
