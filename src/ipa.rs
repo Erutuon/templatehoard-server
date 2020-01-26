@@ -3,14 +3,16 @@ use memmap::Mmap;
 use serde::Deserialize;
 use serde_cbor::Deserializer;
 use std::{
-    borrow::Cow,
     collections::{BTreeMap, HashSet},
     convert::Infallible,
     fmt::{Display, Formatter, Result as FmtResult},
     fs::File,
     io::Result as IoResult,
 };
-use warp::{self, reject::Reject, reply::html, Filter, Rejection, Reply};
+use warp::{
+    self, http::StatusCode, reject::Reject, reply::html, Filter, Rejection,
+    Reply,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct TemplateBorrowed<'a> {
@@ -175,7 +177,7 @@ impl IPASearchParameters {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum InvalidIPAParameters {
     MissingParameters,
     BadLangCharacters(String),
@@ -241,19 +243,6 @@ fn ipa_params(
     )
 }
 
-async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
-    let err_txt = if let Some(e) = err.find::<InvalidIPAParameters>() {
-        Cow::Owned(e.to_string())
-    } else if err.find::<warp::reject::InvalidQuery>().is_some() {
-        Cow::Borrowed(
-            r#"Invalid query string; valid parameters are "search" and "langs"."#,
-        )
-    } else {
-        Cow::Borrowed("Unknown error")
-    };
-    Ok(err_txt)
-}
-
 fn mmap_file(path: &str) -> IoResult<Mmap> {
     let file = File::open(path)?;
     unsafe { Mmap::map(&file) }
@@ -264,13 +253,14 @@ fn do_search(
         search,
         langs: langs_string,
     }: IPASearchParameters,
-) -> impl Reply {
+    cbor_path: &str,
+) -> String {
     let langs = langs_string
         .as_ref()
         .map(|l| l.split(',').collect::<HashSet<_>>());
 
-    let text = mmap_file("cbor/IPA.cbor")
-        .expect("could not memory map CBOR stream file");
+    let text =
+        mmap_file(cbor_path).expect("could not memory map CBOR stream file");
 
     let results = ipa_search_results(
         Deserializer::from_slice(&text).into_iter(),
@@ -278,26 +268,75 @@ fn do_search(
         langs,
     );
 
-    html(
-        Page {
-            title: "IPA search result",
-            body: markup::raw(format!(
-                r#"<table><tbody>{}</tbody></table>"#,
-                results
-                    .into_iter()
-                    .map(|(title, templates)| TitleAndTemplates {
-                        title,
-                        templates
-                    }
-                    .to_string())
-                    .collect::<String>()
-            )),
-        }
-        .to_string(),
-    )
+    Page {
+        title: "IPA search result",
+        body: markup::raw(format!(
+            r#"<table><tbody>{}</tbody></table>"#,
+            results
+                .into_iter()
+                .map(|(title, templates)| TitleAndTemplates {
+                    title,
+                    templates
+                }
+                .to_string())
+                .collect::<String>()
+        )),
+    }
+    .to_string()
 }
 
-pub fn route(
-) -> impl Filter<Extract = (impl Reply,), Error = Infallible> + Clone {
-    ipa_params().map(do_search).recover(handle_rejection)
+enum TextOrHTML<S: Into<String>> {
+    HTML(S),
+    Text(S),
+}
+
+impl<S: Into<String> + Send> Reply for TextOrHTML<S> {
+    fn into_response(self) -> warp::reply::Response {
+        match self {
+            Self::HTML(s) => html(s.into()).into_response(),
+            Self::Text(s) => s.into().into_response(),
+        }
+    }
+}
+
+async fn handle_rejection(
+    err: Rejection,
+    search_page_path: &str,
+) -> Result<impl Reply, Infallible> {
+    let mut status = None;
+    use std::borrow::Cow::*;
+    use TextOrHTML::*;
+    let err_txt = if let Some(e) = err.find::<InvalidIPAParameters>() {
+        if *e == InvalidIPAParameters::MissingParameters {
+            if let Ok(search_page) = std::fs::read_to_string(&search_page_path)
+            {
+                status = Some(StatusCode::OK);
+                HTML(Owned(search_page))
+            } else {
+                status = Some(StatusCode::INTERNAL_SERVER_ERROR);
+                Text(Borrowed("Internal server error\n"))
+            }
+        } else {
+            Text(Owned(e.to_string()))
+        }
+    } else if err.find::<warp::reject::InvalidQuery>().is_some() {
+        Text(Borrowed(
+            r#"Invalid query string; valid parameters are "search" and "langs".\n"#,
+        ))
+    } else {
+        Text(Borrowed("Unknown error\n"))
+    };
+    Ok(warp::reply::with_status(
+        err_txt,
+        status.unwrap_or(StatusCode::NOT_FOUND),
+    ))
+}
+
+pub fn handler<'a>(
+    cbor_path: &'a str,
+    search_path: &'a str,
+) -> impl Filter<Extract = (impl Reply,), Error = Infallible> + Clone + 'a {
+    ipa_params()
+        .map(move |params| html(do_search(params, cbor_path)))
+        .recover(move |e| handle_rejection(e, search_path))
 }

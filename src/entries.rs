@@ -206,8 +206,8 @@ fn entry_list(
     }
 }
 
-pub fn route() -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone
-{
+pub fn handler(
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     warp::filters::path::param()
         .and(warp::query::<EntryParameters>())
         .map(entry_list)

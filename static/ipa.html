@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<title>Search IPA</title>
+		<link rel="stylesheet" type="text/css" href="/static/style.css">
+	</head>
+	<body>
+		<h1>Search IPA transcriptions</h1>
+		<form class="ipa-form" method="get" action="/ipa">
+			<div>
+				<label for="langs">Languages:
+					<input type="search" maxlength="64" name="langs" id="langs" autocomplete="off"
+						autofocus
+						pattern="(?:[a-z]{2,3}(?:-[a-z]{2,3}){0,2})(?:,[a-z]{2,3}(?:-[a-z]{2,3}){0,2})*"
+						placeholder="codes separated by commas">
+				</label>
+			</div>
+			<div>
+				<label for="search">Search string:
+					<input type="search" maxlength="64" name="search" id="search" autocomplete="off" placeholder="IPA">
+				</label>
+			</div>
+			<div><input type="submit" value="Submit"></div>
+		</form>
+	</body>
+</html>
