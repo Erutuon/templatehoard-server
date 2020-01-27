@@ -10,7 +10,8 @@ markup::define! {
             head {
                 meta[charset="utf-8"];
                 title {{title}}
-                link[rel="stylesheet", type="text/css", href="/static/style.css"];
+                // This path is fragile because it assumes that all pages are in the same directory.
+                link[rel="stylesheet", type="text/css", href="./static/style.css"];
             }
             body {{body}}
         }
