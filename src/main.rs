@@ -1,4 +1,4 @@
-use std::convert::Infallible;
+use std::{convert::Infallible, num::NonZeroUsize};
 use warp::{http::StatusCode, path, reject::Rejection, Filter, Reply};
 
 mod entries;
@@ -21,9 +21,12 @@ async fn main() {
     } else {
         route.boxed()
     };
-    let entries_path = path("entries").and(entries::handler());
-    let ipa_path =
-        path("ipa").and(ipa::handler("cbor/IPA.cbor", "static/ipa.html"));
+    let entries_path = path!("entries").and(entries::handler());
+    let ipa_path = path!("ipa").and(ipa::handler(
+        "cbor/IPA.cbor",
+        "static/ipa.html",
+        NonZeroUsize::new(500).unwrap(),
+    ));
     let static_path = path("static").and(warp::fs::dir("static"));
     let route = route
         .and(entries_path.or(ipa_path).or(static_path))

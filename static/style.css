@@ -1,1 +1,32 @@
 a { text-decoration: none; }
+
+#navigation #prev, #navigation #next {
+	display: inline-block;
+	padding: 0.2em 0.4em;
+	border: 1px solid darkgray;
+	margin: 0.4em 0.2em;
+	border-radius: 0.2em;
+	box-shadow: 0.1em 0.1em lightgray;
+	background: linear-gradient(.48turn, hsl(210, 100%, 98%), 60%, hsl(210, 100%, 80%));
+}
+
+table {
+	border-collapse: collapse;
+}
+
+th, td {
+	border: 1px solid darkgray;
+	border-radius: 0.5em;
+	padding: 0.2em 0.4em;
+}
+
+.templates ul {
+	list-style-type: none;
+	padding: 0;
+	margin: 0;
+}
+
+.templates li {
+	font-family: monospace;
+	line-height: 160%;
+}
