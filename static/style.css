@@ -1,5 +1,7 @@
 a { text-decoration: none; }
 
+a:not([href]) { color: hsl(0, 0%, 53%); }
+
 #navigation #prev, #navigation #next {
 	display: inline-block;
 	padding: 0.2em 0.4em;

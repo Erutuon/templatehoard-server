@@ -19,9 +19,16 @@
 			<div>
 				<label for="search">Search string:
 					<input type="search" maxlength="64" name="search" id="search"
-						autocomplete="off" placeholder="IPA">
+						autocomplete="off" placeholder="raw text">
 				</label>
 			</div>
+			<div>
+				<label for="search">Regex:
+					<input type="search" maxlength="64" name="regex" id="regex"
+						autocomplete="off" placeholder="Rust regex">
+				</label>
+			</div>
+			<!--
 			<div>
 				<label for="limit">Count:
 					<input type="number" min="1" max="500" name="limit" id="limit"
@@ -30,10 +37,11 @@
 			</div>
 			<div>
 				<label for="offset">Start:
-					<input type="number" min="0" name="limit" id="limit"
+					<input type="number" min="0" name="offset" id="offset"
 						placeholder="start at nth result">
 				</label>
 			</div>
+			-->
 			<div><input type="submit" value="Submit"></div>
 		</form>
 	</body>
