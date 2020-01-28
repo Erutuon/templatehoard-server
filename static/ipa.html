@@ -2,47 +2,50 @@
 <html>
 	<head>
 		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
 		<title>Search IPA</title>
 		<link rel="stylesheet" type="text/css" href="./static/style.css">
 	</head>
 	<body>
-		<h1>Search IPA transcriptions</h1>
 		<form class="ipa-form" method="get" action="./ipa">
-			<div>
-				<label for="langs">Languages:
-					<input type="search" maxlength="64" name="langs" id="langs" autocomplete="off"
-						autofocus
-						pattern="(?:[a-z]{2,3}(?:-[a-z]{2,3}){0,2})(?:,[a-z]{2,3}(?:-[a-z]{2,3}){0,2})*"
-						placeholder="codes separated by commas">
-				</label>
-			</div>
-			<div>
-				<label for="search">Search string:
-					<input type="search" maxlength="64" name="search" id="search"
-						autocomplete="off" placeholder="raw text">
-				</label>
-			</div>
-			<div>
-				<label for="search">Regex:
-					<input type="search" maxlength="64" name="regex" id="regex"
-						autocomplete="off" placeholder="Rust regex">
-				</label>
-			</div>
-			<!--
-			<div>
-				<label for="limit">Count:
-					<input type="number" min="1" max="500" name="limit" id="limit"
-						placeholder="number of results">
-				</label>
-			</div>
-			<div>
-				<label for="offset">Start:
-					<input type="number" min="0" name="offset" id="offset"
-						placeholder="start at nth result">
-				</label>
-			</div>
-			-->
-			<div><input type="submit" value="Submit"></div>
+			<fieldset>
+				<legend>Search IPA transcriptions</legend>
+				<div>
+					<label for="langs">Languages:
+						<input type="search" maxlength="64" name="langs" id="langs" autocomplete="off"
+							autofocus
+							pattern="(?:[a-z]{2,3}(?:-[a-z]{2,3}){0,2})(?:,[a-z]{2,3}(?:-[a-z]{2,3}){0,2})*"
+							placeholder="codes separated by commas">
+					</label>
+				</div>
+				<div>
+					<label for="search">Plain text:
+						<input type="search" maxlength="64" name="search" id="search"
+							autocomplete="off" placeholder="text search">
+					</label>
+				</div>
+				<div>
+					<label for="search"><a href="https://docs.rs/regex#syntax">Regex</a>:
+						<input type="search" maxlength="64" name="regex" id="regex"
+							autocomplete="off" placeholder="Rust regular expression">
+					</label>
+				</div>
+				<!--
+				<div>
+					<label for="limit">Count:
+						<input type="number" min="1" max="500" name="limit" id="limit"
+							placeholder="number of results">
+					</label>
+				</div>
+				<div>
+					<label for="offset">Start:
+						<input type="number" min="0" name="offset" id="offset"
+							placeholder="start at nth result">
+					</label>
+				</div>
+				-->
+				<div><input type="submit" value="Submit"></div>
+			</fieldset>
 		</form>
 	</body>
 </html>

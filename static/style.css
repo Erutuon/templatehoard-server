@@ -1,6 +1,26 @@
-a { text-decoration: none; }
+body {
+	font-size: 1.2em;
+}
 
-a:not([href]) { color: hsl(0, 0%, 53%); }
+@media only screen and (max-device-width: 480px) {
+	body {
+		font-size: 1.1em;
+	}
+
+	input { font-size: 90%; }
+}
+
+.ipa-form {
+	/*font-size: 120%;*/
+	width: 20em;
+}
+
+.ipa-form div {
+	text-align: right;
+	display: grid;
+	margin: 0.3em 0;
+	/*font-size: inherit;*/
+}
 
 #navigation #prev, #navigation #next {
 	display: inline-block;
@@ -11,6 +31,10 @@ a:not([href]) { color: hsl(0, 0%, 53%); }
 	box-shadow: 0.1em 0.1em lightgray;
 	background: linear-gradient(.48turn, hsl(210, 100%, 98%), 60%, hsl(210, 100%, 80%));
 }
+
+a { text-decoration: none; }
+
+a:not([href]) { color: hsl(0, 0%, 53%); }
 
 table {
 	border-collapse: collapse;
