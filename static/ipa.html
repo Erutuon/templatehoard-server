@@ -3,7 +3,7 @@
 	<head>
 		<meta charset="utf-8">
 		<title>Search IPA</title>
-		<link rel="stylesheet" type="text/css" href="/static/style.css">
+		<link rel="stylesheet" type="text/css" href="../static/style.css">
 	</head>
 	<body>
 		<h1>Search IPA transcriptions</h1>
@@ -18,7 +18,20 @@
 			</div>
 			<div>
 				<label for="search">Search string:
-					<input type="search" maxlength="64" name="search" id="search" autocomplete="off" placeholder="IPA">
+					<input type="search" maxlength="64" name="search" id="search"
+						autocomplete="off" placeholder="IPA">
+				</label>
+			</div>
+			<div>
+				<label for="limit">Count:
+					<input type="number" min="1" max="500" name="limit" id="limit"
+						placeholder="number of results">
+				</label>
+			</div>
+			<div>
+				<label for="offset">Start:
+					<input type="number" min="0" name="limit" id="limit"
+						placeholder="start at nth result">
 				</label>
 			</div>
 			<div><input type="submit" value="Submit"></div>
