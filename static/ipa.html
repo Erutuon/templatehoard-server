@@ -10,8 +10,10 @@
 		<form class="ipa-form" method="get" action="./ipa">
 			<fieldset>
 				<legend>Search IPA transcriptions</legend>
+				<p class="ipa-description">Searches transcriptions from <code>{{<a href="https://en.wiktionary.org/wiki/Template:IPA">IPA</a>}}</code> templates in the latest dump of the English Wiktionary.</p>
 				<div>
 					<label for="langs">Languages:
+						<!-- MAX_PARAM_LEN / 4 in ipa.rs -->
 						<input type="search" maxlength="64" name="langs" id="langs" autocomplete="off"
 							autofocus
 							pattern="(?:[a-z]{2,3}(?:-[a-z]{2,3}){0,2})(?:,[a-z]{2,3}(?:-[a-z]{2,3}){0,2})*"
@@ -20,31 +22,19 @@
 				</div>
 				<div>
 					<label for="search">Plain text:
+						<!-- MAX_PARAM_LEN / 4 in ipa.rs -->
 						<input type="search" maxlength="64" name="search" id="search"
 							autocomplete="off" placeholder="text search">
 					</label>
 				</div>
 				<div>
-					<label for="search"><a href="https://docs.rs/regex#syntax">Regex</a>:
+					<label for="search"><a href="https://docs.rs/regex/1.3.3/regex/#syntax">Regex</a>:
+						<!-- MAX_PARAM_LEN / 4 in ipa.rs -->
 						<input type="search" maxlength="64" name="regex" id="regex"
 							autocomplete="off" placeholder="Rust regular expression">
 					</label>
 				</div>
-				<!--
-				<div>
-					<label for="limit">Count:
-						<input type="number" min="1" max="500" name="limit" id="limit"
-							placeholder="number of results">
-					</label>
-				</div>
-				<div>
-					<label for="offset">Start:
-						<input type="number" min="0" name="offset" id="offset"
-							placeholder="start at nth result">
-					</label>
-				</div>
-				-->
-				<div><input type="submit" value="Submit"></div>
+				<div><input type="submit" value="Search"></div>
 			</fieldset>
 		</form>
 	</body>

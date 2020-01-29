@@ -1,5 +1,4 @@
 use crate::html::Page;
-use matches::assert_matches;
 use memmap::Mmap;
 use regex::{Error as RegexError, Regex};
 use serde::{Deserialize, Serialize, Serializer};
@@ -237,42 +236,51 @@ impl TryFrom<Query> for Args {
         use ArgsError::*;
 
         let Query {
-            langs,
+            mut langs,
             mut search,
             mut regex,
             limit,
             offset,
         } = query;
 
-        // Cannot reject an empty search or regex parameter because the form
-        // appends a search parameter even when the input box is empty.
-        search = search.filter(|s| !s.is_empty());
-        regex = regex.filter(|s| !s.is_empty());
-
-        if !(search.is_some() || langs.is_some() || regex.is_some()) {
+        if !(search.is_some()
+            || langs.is_some()
+            || regex.is_some()
+            || limit.is_some())
+        {
             Err(MissingParameters)
-        } else if is_too_long(&search) || is_too_long(&langs) {
-            Err(TooLong)
         } else {
-            let langs = langs
-                .map(|s| s.parse::<Langs>())
-                .transpose()?
-                .filter(|l| !l.is_empty());
-            let regex =
-                regex.map(|r| Regex::new(&r)).transpose()?.map(|r| r.into());
-            Ok(Args {
-                langs,
-                search,
-                regex,
-                limit,
-                offset,
-            })
+            langs = langs.filter(|s| !s.is_empty());
+            search = search.filter(|s| !s.is_empty());
+            regex = regex.filter(|s| !s.is_empty());
+
+            if is_too_long(&search) || is_too_long(&langs) {
+                Err(TooLong)
+            } else {
+                let langs = langs
+                    .map(|s| s.parse::<Langs>())
+                    .transpose()?
+                    .filter(|l| !l.is_empty());
+                let regex = regex
+                    .map(|r| Regex::new(&r))
+                    .transpose()?
+                    .map(|r| r.into());
+                Ok(Args {
+                    langs,
+                    search,
+                    regex,
+                    limit,
+                    offset,
+                })
+            }
         }
     }
 }
 
 #[test]
 fn test_try_into_args() {
+    use matches::assert_matches;
+
     // Test default values for empty strings in `Query`.
     let query = Query {
         langs: Some("".parse().unwrap()),
@@ -281,9 +289,9 @@ fn test_try_into_args() {
         offset: 0,
         limit: None,
     };
-    
+
     let actual = Args::try_from(query);
-    
+
     assert_matches!(
         actual,
         Ok(Args {
@@ -294,7 +302,7 @@ fn test_try_into_args() {
             limit: None,
         })
     );
-    
+
     let query = Query {
         langs: Some("".parse().unwrap()),
         search: Some("".into()),
@@ -302,9 +310,9 @@ fn test_try_into_args() {
         offset: 0,
         limit: None,
     };
-    
+
     let actual = Args::try_from(query);
-    
+
     assert_matches!(
         actual,
         Ok(Args {
@@ -394,6 +402,23 @@ fn ipa_search_results<'a, 'b: 'a>(
     limit: NonZeroUsize,
     offset: usize,
 ) -> BTreeMap<UniCase<&'a str>, Vec<TemplateBorrowed<'a>>> {
+    fn any_transcription<T, F>(
+        val: &Option<T>,
+        template: &TemplateBorrowed<'_>,
+        filter: F,
+    ) -> bool
+    where
+        F: Fn(&T, &str) -> bool,
+    {
+        val.as_ref()
+            .map(|s| {
+                template.parameters.iter().skip(1).any(|(k, v)| {
+                    k.bytes().all(|c| c.is_ascii_digit()) && filter(&s, &v)
+                })
+            })
+            .unwrap_or(true)
+    }
+
     let ipa_filter = |template: &TemplateBorrowed<'_>| {
         langs
             .as_ref()
@@ -405,24 +430,14 @@ fn ipa_search_results<'a, 'b: 'a>(
                     .unwrap_or(false)
             })
             .unwrap_or(true)
-            && search
-                .as_ref()
-                .map(|s| {
-                    template.parameters.iter().skip(1).any(|(k, v)| {
-                        k.bytes().all(|c| c.is_ascii_digit())
-                            && v.contains(s.as_str())
-                    })
-                })
-                .unwrap_or(true)
-            && regex
-                .as_ref()
-                .map(|r| {
-                    template.parameters.iter().skip(1).any(|(k, v)| {
-                        k.bytes().all(|c| c.is_ascii_digit()) && r.is_match(v)
-                    })
-                })
-                .unwrap_or(true)
+            && any_transcription(&search, &template, |search, tr| {
+                tr.contains(search)
+            })
+            && any_transcription(&regex, &template, |regex, tr| {
+                regex.is_match(tr)
+            })
     };
+
     deserializer
         .filter_map(|val| {
             let TemplatesInPage { title, templates } = val.unwrap();
@@ -437,6 +452,37 @@ fn ipa_search_results<'a, 'b: 'a>(
         .skip(offset)
         .take(limit.get())
         .collect()
+}
+
+fn escape_attribute(s: &str) -> String {
+    let mut output = Vec::with_capacity(s.len());
+    let mut last = 0;
+    for (i, b) in s.bytes().enumerate() {
+        match b {
+            b'&' => {
+                output.extend_from_slice(&s.as_bytes()[last..i]);
+                output.extend_from_slice(b"&amp;");
+                last = i + 1;
+            }
+            b'"' => {
+                output.extend_from_slice(&s.as_bytes()[last..i]);
+                output.extend_from_slice(b"&quot;");
+                last = i + 1;
+            }
+            _ => {}
+        }
+    }
+    output.extend_from_slice(&s.as_bytes()[last..]);
+    // This is safe because we have only been replacing ASCII bytes.
+    unsafe { String::from_utf8_unchecked(output) }
+}
+
+#[test]
+fn test_escape_attribute() {
+    assert_eq!(
+        escape_attribute(r#" " & " "#).as_str(),
+        " &quot; &amp; &quot; "
+    );
 }
 
 fn do_search(
@@ -472,6 +518,7 @@ fn do_search(
         limit: Some(limit),
         offset,
     };
+
     let empty_link = |text| format!(r#"<a>{}</a>"#, text);
     let mut navigation_link =
         |checked_arith: &dyn Fn(usize, usize) -> Option<usize>, text| {
@@ -480,7 +527,11 @@ fn do_search(
                     args.offset = offset;
                     // Should be infallible because a UTF-8 error is impossible.
                     let query = serde_urlencoded::to_string(&args).unwrap();
-                    format!(r#"<a href="?{}">{}</a>"#, query, text)
+                    format!(
+                        r#"<a href="?{}">{}</a>"#,
+                        escape_attribute(&query),
+                        text
+                    )
                 })
                 .unwrap_or_else(|| empty_link(text))
         };
@@ -491,18 +542,32 @@ fn do_search(
         empty_link("next")
     };
 
+    let caption = format!(
+        "{count} result{plural}{extra}",
+        count = results.len(),
+        plural = if results.len() == 1 { "" } else { "s" },
+        extra = if results.len() == limit.get() {
+            " or more"
+        } else {
+            ""
+        }
+    );
+
     Page {
         title: "IPA search result",
         body: markup::raw(format!(
             concat!(
                 r#"<div id="navigation">"#,
-                r#"<div id="prev">{prev}</div><div id="next">{next}</div></div>"#,
-                r#"<table class="search-results">"#,
+                r#"<div id="prev">{prev}</div>"#,
+                r#"<div id="prev"><a href="ipa">search page</a></div>"#,
+                r#"<div id="next">{next}</div></div>"#,
+                r#"<table class="search-results"><caption>{caption}</caption>"#,
                 "<thead><tr><th>page</th><th>IPA templates</th></tr></thead>",
                 "<tbody>{results}</tbody></table>"
             ),
             prev = prev,
             next = next,
+            caption = caption,
             results = results
                 .into_iter()
                 .map(|(title, templates)| TitleAndTemplates {

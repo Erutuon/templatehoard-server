@@ -22,12 +22,24 @@ body {
 	/*font-size: inherit;*/
 }
 
+.ipa-description {
+	margin: 0 0 0.3em;
+	border: 1px solid hsl(197, 71%, 90%);
+	border-radius: 0.5em;
+	padding: 0.3em 0.6em;
+	font-size: 75%;
+}
+
+input {
+	border-radius: 0.3em;
+}
+
 #navigation #prev, #navigation #next {
 	display: inline-block;
-	padding: 0.2em 0.4em;
-	border: 1px solid darkgray;
 	margin: 0.4em 0.2em;
+	border: 1px solid darkgray;
 	border-radius: 0.2em;
+	padding: 0.2em 0.4em;
 	box-shadow: 0.1em 0.1em lightgray;
 	background: linear-gradient(.48turn, hsl(210, 100%, 98%), 60%, hsl(210, 100%, 80%));
 }
@@ -48,8 +60,8 @@ th, td {
 
 .templates ul {
 	list-style-type: none;
-	padding: 0;
 	margin: 0;
+	padding: 0;
 }
 
 .templates li {

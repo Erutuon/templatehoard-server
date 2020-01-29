@@ -1,9 +1,23 @@
-use std::{convert::Infallible, num::NonZeroUsize};
+use env_logger;
+use log;
+use std::{convert::Infallible, fmt, num::NonZeroUsize};
 use warp::{http::StatusCode, path, reject::Rejection, Filter, Reply};
 
 mod entries;
 mod html;
 mod ipa;
+
+struct OptFmt<T>(Option<T>);
+
+impl<T: fmt::Display> fmt::Display for OptFmt<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if let Some(ref t) = self.0 {
+            fmt::Display::fmt(t, f)
+        } else {
+            f.write_str("-")
+        }
+    }
+}
 
 async fn print_err(err: Rejection) -> Result<impl Reply, Infallible> {
     Ok(warp::reply::with_status(
@@ -14,6 +28,7 @@ async fn print_err(err: Rejection) -> Result<impl Reply, Infallible> {
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
     let root = std::env::args().nth(1);
     let route = warp::get();
     let route = if let Some(r) = root {
@@ -28,9 +43,23 @@ async fn main() {
         NonZeroUsize::new(500).unwrap(),
     ));
     let static_path = path("static").and(warp::fs::dir("static"));
+    let log = warp::log::custom(|info| {
+        log::info!(
+            target: "all",
+            r#""{} {} {:?}" {} "{}" "{}" {:?}"#,
+            info.method(),
+            info.path(),
+            info.version(),
+            info.status().as_u16(),
+            OptFmt(info.referer()),
+            OptFmt(info.user_agent()),
+            info.elapsed(),
+        );
+    });
     let route = route
         .and(entries_path.or(ipa_path).or(static_path))
-        .recover(print_err);
+        .recover(print_err)
+        .with(log);
     let port: u16 = std::env::var("PORT")
         .map(|s| s.parse().expect("could not parse PORT variable"))
         .unwrap_or(3030);
