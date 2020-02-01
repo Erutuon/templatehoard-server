@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>Search template parameters</title>
+		<link rel="stylesheet" type="text/css" href="./static/style.css">
+	</head>
+	<body>
+		<form class="ipa-form" method="get">
+			<fieldset>
+				<legend>Search template parameters</legend>
+				<p class="ipa-description">Searches template parameters from particular templates in the latest dump of the English Wiktionary.</p>
+				<div>
+					<label for="parameter">Template:
+						<input type="search" maxlength="64" name="template" id="template" autocomplete="off"
+							autofocus
+							placeholder="template name">
+					</label>
+					<label for="parameter">Parameter:
+						<input type="search" maxlength="64" name="parameter" id="parameter" autocomplete="off"
+							autofocus
+							placeholder="parameter name or number">
+					</label>
+				</div>
+				<div>
+					<label for="search">Plain text:
+						<input type="search" maxlength="64" name="search" id="search"
+							autocomplete="off" placeholder="text to find in parameter">
+					</label>
+				</div>
+				<div>
+					<label for="search"><a href="https://docs.rs/regex/1.3.3/regex/#syntax">Regex</a>:
+						<input type="search" maxlength="64" name="regex" id="regex"
+							autocomplete="off" placeholder="Rust regular expression">
+					</label>
+				</div>
+				<div><input type="submit" value="Search"></div>
+			</fieldset>
+		</form>
+	</body>
+</html>

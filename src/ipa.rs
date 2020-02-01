@@ -1,18 +1,13 @@
-use crate::html::Page;
-use memmap::Mmap;
 use regex::{Error as RegexError, Regex};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_cbor::Deserializer;
-use serde_urlencoded;
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, BTreeSet},
+    // cmp::Ord,
+    collections::BTreeSet,
     convert::{Infallible, TryFrom},
     fmt::{Display, Formatter, Result as FmtResult},
-    fs::File,
-    io::Result as IoResult,
     num::NonZeroUsize,
-    ops::Deref,
     str::FromStr,
 };
 use unicase::UniCase;
@@ -21,70 +16,10 @@ use warp::{
     Reply,
 };
 
-#[derive(Debug, Deserialize)]
-pub struct TemplateBorrowed<'a> {
-    name: &'a str,
-    parameters: BTreeMap<&'a str, &'a str>,
-    text: Option<&'a str>,
-}
-
-// If `text` is `None`, print the parameters in a sensible way.
-impl<'a> Display for TemplateBorrowed<'a> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        if let Some(text) = self.text {
-            write!(f, "{}", text)
-        } else {
-            write!(f, "{{{{{}", self.name)?;
-            let mut prev = 0;
-            let mut sequential = true;
-            for (k, v) in &self.parameters {
-                if sequential && k.bytes().all(|b| b.is_ascii_digit()) {
-                    let cur: u64 = k.parse().unwrap();
-                    sequential = cur == prev + 1;
-                    if sequential {
-                        write!(f, "|{}", v)?;
-                    } else {
-                        write!(f, "|{}={}", k, v)?;
-                    }
-                    prev = cur;
-                } else {
-                    write!(f, "|{}={}", k, v)?;
-                }
-            }
-            write!(f, "}}}}")
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct TemplatesInPage<'a> {
-    title: &'a str,
-    templates: Vec<TemplateBorrowed<'a>>,
-}
-
-markup::define! {
-    TitleAndTemplates<'a> (
-        title: UniCase<&'a str>,
-        templates: Vec<TemplateBorrowed<'a>>
-    ) {
-        tr {
-            td."title" {
-                a[href={format!("https://en.wiktionary.org/wiki/{}", title)}] {
-                    {title.as_ref()}
-                }
-            }
-            td."templates" {
-                ul {
-                    @for template in templates.iter() {
-                        li {
-                            {template.to_string()}
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
+use crate::common::{
+    mmap_file, print_template_search_results, RegexWrapper, TemplateBorrowed,
+    TemplatesInPage, TextOrHTML, TitleAndTemplates, WithLimitAndOffset,
+};
 
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
@@ -97,32 +32,35 @@ struct Query {
     offset: usize,
 }
 
-/*
-enum Matcher {
-    PlainText(String),
-    Regex(Regex),
-}
+impl Query {
+    /// Determines whether the query contains any parameters that require
+    /// search results to be displayed.
+    fn is_some(&self) -> bool {
+        self.langs.is_some()
+            || self.search.is_some()
+            || self.regex.is_some()
+            || self.limit.is_some()
+    }
 
-impl Matcher {
-    fn is_match(&self, s: &str) {
-        match self {
-            Matcher::PlainText(p) => s.contains(p),
-            Matcher::Regex(r) => r.is_match(s),
-        }
+    fn any_longer_than(&self, limit: usize) -> bool {
+        [&self.langs, &self.search, &self.regex]
+            .iter()
+            .any(|param| {
+                param.as_ref().map(|s| s.len() > limit).unwrap_or(false)
+            })
     }
 }
-*/
 
 #[derive(Serialize, Debug)]
 struct Args {
     langs: Option<Langs>,
     search: Option<String>,
     regex: Option<RegexWrapper>,
-    limit: Option<NonZeroUsize>,
+    limit: NonZeroUsize,
     offset: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Langs(BTreeSet<String>);
 
 impl Langs {
@@ -184,34 +122,9 @@ impl Serialize for Langs {
     }
 }
 
-#[derive(Debug)]
-struct RegexWrapper(Regex);
-
-impl Deref for RegexWrapper {
-    type Target = Regex;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl From<Regex> for RegexWrapper {
-    fn from(regex: Regex) -> Self {
-        RegexWrapper(regex)
-    }
-}
-
-impl Serialize for RegexWrapper {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
 #[test]
 fn test_serialize_args() {
+    use serde_urlencoded;
     let args = Args {
         langs: "en,de".parse().ok(),
         search: Some("kul".into()),
@@ -230,55 +143,51 @@ fn test_serialize_args() {
 }
 
 impl TryFrom<Query> for Args {
-    type Error = ArgsError;
+    type Error = IPAError;
 
     fn try_from(query: Query) -> Result<Self, Self::Error> {
-        use ArgsError::*;
+        use IPAError::*;
 
-        let Query {
-            mut langs,
-            mut search,
-            mut regex,
-            limit,
-            offset,
-        } = query;
-
-        if !(search.is_some()
-            || langs.is_some()
-            || regex.is_some()
-            || limit.is_some())
-        {
+        if !query.is_some() {
             Err(MissingParameters)
         } else {
+            let Query {
+                mut langs,
+                mut search,
+                mut regex,
+                limit,
+                offset,
+            } = query;
+
             langs = langs.filter(|s| !s.is_empty());
             search = search.filter(|s| !s.is_empty());
             regex = regex.filter(|s| !s.is_empty());
 
-            if is_too_long(&search) || is_too_long(&langs) {
-                Err(TooLong)
+            let limit = if let Some(l) = limit {
+                l
             } else {
-                let langs = langs
-                    .map(|s| s.parse::<Langs>())
-                    .transpose()?
-                    .filter(|l| !l.is_empty());
-                let regex = regex
-                    .map(|r| Regex::new(&r))
-                    .transpose()?
-                    .map(|r| r.into());
-                Ok(Args {
-                    langs,
-                    search,
-                    regex,
-                    limit,
-                    offset,
-                })
-            }
+                return Err(NoLimit);
+            };
+
+            let langs = langs
+                .map(|s| s.parse::<Langs>())
+                .transpose()?
+                .filter(|l| !l.is_empty());
+            let regex =
+                regex.map(|r| Regex::new(&r)).transpose()?.map(|r| r.into());
+            Ok(Args {
+                langs,
+                search,
+                regex,
+                limit,
+                offset,
+            })
         }
     }
 }
 
 #[test]
-fn test_try_into_args() {
+fn test_try_from_args() {
     use matches::assert_matches;
 
     // Test default values for empty strings in `Query`.
@@ -325,31 +234,45 @@ fn test_try_into_args() {
     );
 }
 
+impl WithLimitAndOffset for Args {
+    fn get_offset(&self) -> usize {
+        self.offset
+    }
+    fn set_offset(&mut self, offset: usize) {
+        self.offset = offset;
+    }
+    fn get_limit(&self) -> NonZeroUsize {
+        self.limit
+    }
+}
+
 #[derive(Debug, Clone)]
-enum ArgsError {
+enum IPAError {
     MissingParameters,
     TooLong,
     LangsErr(String),
     RegexError(RegexError),
+    CBORError(String),
+    NoLimit,
 }
 
-impl Reject for ArgsError {}
+impl Reject for IPAError {}
 
-impl From<LangsErr> for ArgsError {
+impl From<LangsErr> for IPAError {
     fn from(LangsErr(chars): LangsErr) -> Self {
-        ArgsError::LangsErr(chars)
+        IPAError::LangsErr(chars)
     }
 }
 
-impl From<RegexError> for ArgsError {
+impl From<RegexError> for IPAError {
     fn from(err: RegexError) -> Self {
-        ArgsError::RegexError(err)
+        IPAError::RegexError(err)
     }
 }
 
-impl Display for ArgsError {
+impl Display for IPAError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        use ArgsError::*;
+        use IPAError::*;
         match self {
             MissingParameters => write!(
                 f,
@@ -364,8 +287,7 @@ impl Display for ArgsError {
             ),
             TooLong => write!(
                 f,
-                r#"Either the "langs" or "search" parameter was too long. The limit is {} bytes."#,
-                MAX_PARAM_LEN
+                r#"One or more of "langs" or "search" or "regex" was too long."#,
             ),
             LangsErr(chars) => write!(
                 f,
@@ -373,35 +295,25 @@ impl Display for ArgsError {
                 chars
             ),
             RegexError(e) => write!(f, "{}", e),
+            CBORError(e) => write!(f, "{}", e),
+            NoLimit => write!(f, "A limit is required."),
         }
     }
 }
 
-const MAX_PARAM_LEN: usize = 256;
-fn is_too_long(param: &Option<String>) -> bool {
-    param
-        .as_ref()
-        .map(|s| s.len() > MAX_PARAM_LEN)
-        .unwrap_or(false)
-}
-
-fn mmap_file(path: &str) -> IoResult<Mmap> {
-    let file = File::open(path)?;
-    unsafe { Mmap::map(&file) }
-}
-
-// Returns a map from title to templates, filtered by the language codes
-// and search string. If the search string is present, returns templates
-// containing transcriptions that contain it; if the list of language codes
-// is present, the language code (argument 1) must be be found in the list.
-fn ipa_search_results<'a, 'b: 'a>(
-    deserializer: impl Iterator<Item = serde_cbor::Result<TemplatesInPage<'a>>>,
-    langs: &Option<Langs>,
-    search: &Option<String>,
-    regex: &Option<RegexWrapper>,
-    limit: NonZeroUsize,
-    offset: usize,
-) -> BTreeMap<UniCase<&'a str>, Vec<TemplateBorrowed<'a>>> {
+// Returns an iterator filtered by the language codes, search string,
+// and regex (if any). If the search string or regex are present, returns templates
+// containing transcriptions that match each of them; if the list of language codes
+// is present, the language code (argument 1) must be be found in the list. If all
+// are `None`, all results are returned.
+fn ipa_search_results<'iter, 'template: 'iter, 'matcher: 'iter>(
+    deserializer: impl Iterator<Item = serde_cbor::Result<TemplatesInPage<'template>>>
+        + 'iter,
+    langs: &'matcher Option<Langs>,
+    search: &'matcher Option<String>,
+    regex: &'matcher Option<RegexWrapper>,
+) -> impl Iterator<Item = serde_cbor::Result<TitleAndTemplates<'template>>> + 'iter
+{
     fn any_transcription<T, F>(
         val: &Option<T>,
         template: &TemplateBorrowed<'_>,
@@ -419,7 +331,7 @@ fn ipa_search_results<'a, 'b: 'a>(
             .unwrap_or(true)
     }
 
-    let ipa_filter = |template: &TemplateBorrowed<'_>| {
+    let ipa_filter = move |template: &TemplateBorrowed<'_>| {
         langs
             .as_ref()
             .map(|l| {
@@ -438,51 +350,21 @@ fn ipa_search_results<'a, 'b: 'a>(
             })
     };
 
-    deserializer
-        .filter_map(|val| {
-            let TemplatesInPage { title, templates } = val.unwrap();
-            let matches: Vec<TemplateBorrowed<'a>> =
-                templates.into_iter().filter(&ipa_filter).collect();
-            if matches.is_empty() {
-                None
+    deserializer.filter_map(move |page| {
+        page.map(|p| {
+            let TemplatesInPage { title, templates } = p;
+            let mut templates =
+                templates.into_iter().filter(&ipa_filter).peekable();
+            if templates.peek().is_some() {
+                let title = UniCase::new(title);
+                let templates = templates.collect();
+                Some(TitleAndTemplates { title, templates })
             } else {
-                Some((UniCase::new(title), matches))
+                None
             }
         })
-        .skip(offset)
-        .take(limit.get())
-        .collect()
-}
-
-fn escape_attribute(s: &str) -> String {
-    let mut output = Vec::with_capacity(s.len());
-    let mut last = 0;
-    for (i, b) in s.bytes().enumerate() {
-        match b {
-            b'&' => {
-                output.extend_from_slice(&s.as_bytes()[last..i]);
-                output.extend_from_slice(b"&amp;");
-                last = i + 1;
-            }
-            b'"' => {
-                output.extend_from_slice(&s.as_bytes()[last..i]);
-                output.extend_from_slice(b"&quot;");
-                last = i + 1;
-            }
-            _ => {}
-        }
-    }
-    output.extend_from_slice(&s.as_bytes()[last..]);
-    // This is safe because we have only been replacing ASCII bytes.
-    unsafe { String::from_utf8_unchecked(output) }
-}
-
-#[test]
-fn test_escape_attribute() {
-    assert_eq!(
-        escape_attribute(r#" " & " "#).as_str(),
-        " &quot; &amp; &quot; "
-    );
+        .transpose()
+    })
 }
 
 fn do_search(
@@ -494,126 +376,59 @@ fn do_search(
         offset,
     }: Args,
     cbor_path: &str,
-    max_limit: NonZeroUsize,
-) -> String {
+) -> Result<String, serde_cbor::Error> {
     let text =
         mmap_file(cbor_path).expect("could not memory map CBOR stream file");
 
-    let limit = limit
-        .map(|l| if l > max_limit { max_limit } else { l })
-        .unwrap_or(max_limit);
     let results = ipa_search_results(
         Deserializer::from_slice(&text).into_iter(),
         &langs,
         &search,
         &regex,
+    );
+
+    let args = Args {
+        langs: langs.clone(),
+        search: search.clone(),
+        regex: regex.clone(),
         limit,
         offset,
-    );
-
-    let mut args = Args {
-        langs,
-        search,
-        regex,
-        limit: Some(limit),
-        offset,
     };
-
-    let empty_link = |text| format!(r#"<a>{}</a>"#, text);
-    let mut navigation_link =
-        |checked_arith: &dyn Fn(usize, usize) -> Option<usize>, text| {
-            checked_arith(offset, limit.get())
-                .map(|offset| {
-                    args.offset = offset;
-                    // Should be infallible because a UTF-8 error is impossible.
-                    let query = serde_urlencoded::to_string(&args).unwrap();
-                    format!(
-                        r#"<a href="?{}">{}</a>"#,
-                        escape_attribute(&query),
-                        text
-                    )
-                })
-                .unwrap_or_else(|| empty_link(text))
-        };
-    let prev = navigation_link(&usize::checked_sub, "prev");
-    let next = if results.len() >= limit.get() {
-        navigation_link(&usize::checked_add, "next")
-    } else {
-        empty_link("next")
-    };
-
-    let caption = format!(
-        "{count} result{plural}{extra}",
-        count = results.len(),
-        plural = if results.len() == 1 { "" } else { "s" },
-        extra = if results.len() == limit.get() {
-            " or more"
-        } else {
-            ""
-        }
-    );
-
-    Page {
-        title: "IPA search result",
-        body: markup::raw(format!(
-            concat!(
-                r#"<div id="navigation">"#,
-                r#"<div id="prev">{prev}</div>"#,
-                r#"<div id="prev"><a href="ipa">search page</a></div>"#,
-                r#"<div id="next">{next}</div></div>"#,
-                r#"<table class="search-results"><caption>{caption}</caption>"#,
-                "<thead><tr><th>page</th><th>IPA templates</th></tr></thead>",
-                "<tbody>{results}</tbody></table>"
-            ),
-            prev = prev,
-            next = next,
-            caption = caption,
-            results = results
-                .into_iter()
-                .map(|(title, templates)| TitleAndTemplates {
-                    title: title,
-                    templates
-                }
-                .to_string())
-                .collect::<String>()
-        )),
-    }
-    .to_string()
-}
-
-enum TextOrHTML<S: Into<String>> {
-    HTML(S),
-    Text(S),
-}
-
-impl<S: Into<String> + Send> Reply for TextOrHTML<S> {
-    fn into_response(self) -> warp::reply::Response {
-        match self {
-            Self::HTML(s) => html(s.into()).into_response(),
-            Self::Text(s) => s.into().into_response(),
-        }
-    }
+    print_template_search_results(results, args, "IPA search results")
 }
 
 async fn print_err(
     err: Rejection,
     search_page_path: &str,
+    max_query_len: NonZeroUsize,
 ) -> Result<impl Reply, Infallible> {
     let mut status = None;
     use Cow::*;
     use TextOrHTML::*;
-    let err_txt = if let Some(e) = err.find::<ArgsError>() {
-        if let ArgsError::MissingParameters = *e {
-            if let Ok(search_page) = std::fs::read_to_string(&search_page_path)
-            {
-                status = Some(StatusCode::OK);
-                HTML(Owned(search_page))
-            } else {
+    let err_txt = if let Some(e) = err.find::<IPAError>() {
+        match &e {
+            IPAError::MissingParameters => {
+                if let Ok(search_page) =
+                    std::fs::read_to_string(&search_page_path)
+                {
+                    status = Some(StatusCode::OK);
+                    HTML(Owned(search_page))
+                } else {
+                    status = Some(StatusCode::INTERNAL_SERVER_ERROR);
+                    Text(Borrowed("Internal server error\n"))
+                }
+            }
+            // Limit should have been set before `Query` was converted into `Args`.
+            IPAError::NoLimit => {
                 status = Some(StatusCode::INTERNAL_SERVER_ERROR);
                 Text(Borrowed("Internal server error\n"))
             }
-        } else {
-            Text(Owned(e.to_string()))
+            IPAError::TooLong => Text(Owned(format!(
+                "{} The limit is {}.",
+                e.to_string(),
+                max_query_len.get()
+            ))),
+            _ => Text(Owned(e.to_string())),
         }
     } else if err.find::<warp::reject::InvalidQuery>().is_some() {
         Text(Borrowed(concat!(
@@ -634,11 +449,29 @@ pub fn handler<'a>(
     cbor_path: &'a str,
     search_page_path: &'a str,
     max_limit: NonZeroUsize,
+    max_query_len: NonZeroUsize,
 ) -> impl Filter<Extract = (impl Reply,), Error = Infallible> + Clone + 'a {
     warp::query::<Query>()
-        .and_then(|params: Query| {
-            async { Args::try_from(params).map_err(warp::reject::custom) }
+        .and_then(move |mut params: Query| async move {
+            if params.is_some() {
+                params.limit =
+                    params.limit.map(|l| l.min(max_limit)).or(Some(max_limit));
+            }
+            if params.any_longer_than(max_query_len.get()) {
+                Err(warp::reject::custom(IPAError::TooLong))
+            } else {
+                Args::try_from(params).map_err(warp::reject::custom)
+            }
         })
-        .map(move |args| html(do_search(args, cbor_path, max_limit)))
-        .recover(move |e| print_err(e, search_page_path))
+        .and_then(move |args| async move {
+            log::info!(
+                target: "all",
+                "{:?}",
+                &args,
+            );
+            do_search(args, cbor_path).map(html).map_err(|e| {
+                warp::reject::custom(IPAError::CBORError(e.to_string()))
+            })
+        })
+        .recover(move |e| print_err(e, search_page_path, max_query_len))
 }

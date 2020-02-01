@@ -3,9 +3,10 @@ use log;
 use std::{convert::Infallible, fmt, num::NonZeroUsize};
 use warp::{http::StatusCode, path, reject::Rejection, Filter, Reply};
 
-mod entries;
+mod common;
 mod html;
 mod ipa;
+mod templates;
 
 struct OptFmt<T>(Option<T>);
 
@@ -36,11 +37,18 @@ async fn main() {
     } else {
         route.boxed()
     };
-    let entries_path = path!("entries").and(entries::handler());
+    let results_limit = NonZeroUsize::new(500).unwrap();
+    let query_limit = NonZeroUsize::new(256).unwrap();
     let ipa_path = path!("ipa").and(ipa::handler(
         "cbor/IPA.cbor",
         "static/ipa.html",
-        NonZeroUsize::new(500).unwrap(),
+        results_limit,
+        query_limit,
+    ));
+    let templates_path = path!("templates").and(templates::handler(
+        "static/templates.html",
+        results_limit,
+        query_limit,
     ));
     let static_path = path("static").and(warp::fs::dir("static"));
     let log = warp::log::custom(|info| {
@@ -57,7 +65,13 @@ async fn main() {
         );
     });
     let route = route
-        .and(entries_path.or(ipa_path).or(static_path))
+        .and(
+            warp::path::end()
+                .and(warp::fs::file("static/index.html"))
+                .or(static_path)
+                .or(ipa_path)
+                .or(templates_path),
+        )
         .recover(print_err)
         .with(log);
     let port: u16 = std::env::var("PORT")
