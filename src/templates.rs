@@ -1,8 +1,11 @@
 use log;
+use once_cell::sync::OnceCell;
 use regex::Error as RegexError;
 use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
 use serde_cbor::{Deserializer, Result as CBORResult};
+use serde_json;
 use std::{
+    collections::HashMap,
     convert::{Infallible, TryFrom},
     fmt::{Display, Formatter, Result as FmtResult},
     num::NonZeroUsize,
@@ -95,6 +98,16 @@ struct Args {
     limit: NonZeroUsize,
 }
 
+fn spaces_to_underscores(s: &mut str) {
+    unsafe {
+        for b in s.as_bytes_mut().iter_mut() {
+            if *b == b' ' {
+                *b = b'_';
+            }
+        }
+    }
+}
+
 impl TryFrom<Query> for Args {
     type Error = TemplatesError;
 
@@ -110,7 +123,8 @@ impl TryFrom<Query> for Args {
             limit,
         } = query;
 
-        let template = if let Some(t) = template.filter(|t| !t.is_empty()) {
+        let template = if let Some(mut t) = template.filter(|t| !t.is_empty()) {
+            spaces_to_underscores(&mut t);
             t
         } else {
             return Err(MissingTemplate);
@@ -184,7 +198,7 @@ enum TemplatesError {
     RegexError(RegexError),
     CBORError(String),
     NoLimit,
-    FileNotFound(String),
+    TemplateDumpNotFound(String),
 }
 
 impl Reject for TemplatesError {}
@@ -220,7 +234,11 @@ impl Display for TemplatesError {
             RegexError(e) => write!(f, "{}", e),
             CBORError(e) => write!(f, "{}", e),
             NoLimit => write!(f, "A limit is required."),
-            FileNotFound(file) => write!(f, "Could not open {}", file),
+            TemplateDumpNotFound(t) => write!(
+                f,
+                "The template {{{{{template}}}}} has not been dumped.",
+                template = t
+            ),
         }
     }
 }
@@ -272,7 +290,7 @@ fn filter_templates_by_parameter(args: Args) -> Result<String, TemplatesError> {
         t
     } else {
         // log error?
-        return Err(TemplatesError::FileNotFound(cbor_path));
+        return Err(TemplatesError::TemplateDumpNotFound(args.template_name));
     };
 
     let pages = Deserializer::from_slice(&text).into_iter();
@@ -313,7 +331,7 @@ fn print_err(
                 }
             }
             // Limit should have been set before `Query` was converted into `Args`.
-            NoLimit | FileNotFound(_) => {
+            NoLimit => {
                 status = Some(StatusCode::INTERNAL_SERVER_ERROR);
                 Text(Borrowed("Internal server error\n"))
             }
@@ -335,16 +353,49 @@ fn print_err(
     ))
 }
 
+static REDIRECTS: OnceCell<Option<HashMap<String, String>>> = OnceCell::new();
+
 pub fn handler<'a>(
     search_page_path: &'a str,
+    template_redirect_filepath: &'a str,
     max_limit: NonZeroUsize,
     max_query_len: NonZeroUsize,
 ) -> impl Filter<Extract = (impl Reply,), Error = Infallible> + Clone + 'a {
+    // Expects file in JSON format with template names and the redirects
+    // that point to them (without the namespace prefix):
+    // { "template name": [ "redirect 1", "redirect 2", ... ], ...}.
+    // Lazy<>
+    let template_redirects: &Option<HashMap<String, String>> = REDIRECTS
+        .get_or_init(|| {
+            let text =
+                std::fs::read_to_string(template_redirect_filepath).ok()?;
+            let target_to_redirects: HashMap<String, Vec<String>> =
+                serde_json::from_str(&text).ok()?;
+            Some(
+                target_to_redirects
+                    .into_iter()
+                    .flat_map(|(target, redirects)| {
+                        redirects
+                            .into_iter()
+                            .map(move |redirect| (redirect, target.clone()))
+                    })
+                    .collect(),
+            )
+        });
+
     warp::query::<Query>()
         .and_then(move |mut params: Query| async move {
             if params.is_some() {
                 params.limit =
                     params.limit.map(|l| l.min(max_limit)).or(Some(max_limit));
+            }
+            if let Some(redirects) = template_redirects {
+                if let Some(template) = params.template {
+                    params.template = redirects
+                        .get(&template)
+                        .cloned()
+                        .or(Some(template));
+                }
             }
             if params.any_longer_than(max_query_len.get()) {
                 Err(warp::reject::custom(TemplatesError::TooLong))

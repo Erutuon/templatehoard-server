@@ -10,19 +10,19 @@ body {
 	input { font-size: 90%; }
 }
 
-.ipa-form {
+.search-form {
 	/*font-size: 120%;*/
 	width: 20em;
 }
 
-.ipa-form div {
+.search-form div {
 	text-align: right;
 	display: grid;
 	margin: 0.3em 0;
 	/*font-size: inherit;*/
 }
 
-.ipa-description {
+.search-description {
 	margin: 0 0 0.3em;
 	border: 1px solid hsl(197, 71%, 90%);
 	border-radius: 0.5em;

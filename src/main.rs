@@ -6,6 +6,7 @@ use warp::{http::StatusCode, path, reject::Rejection, Filter, Reply};
 mod common;
 mod html;
 mod ipa;
+mod redirect;
 mod templates;
 
 struct OptFmt<T>(Option<T>);
@@ -47,6 +48,7 @@ async fn main() {
     ));
     let templates_path = path!("templates").and(templates::handler(
         "static/templates.html",
+        "template_redirects.json",
         results_limit,
         query_limit,
     ));
@@ -66,11 +68,11 @@ async fn main() {
     });
     let route = route
         .and(
-            warp::path::end()
+            redirect::add_slash_if_no_extension().or(warp::path::end()
                 .and(warp::fs::file("static/index.html"))
                 .or(static_path)
                 .or(ipa_path)
-                .or(templates_path),
+                .or(templates_path)),
         )
         .recover(print_err)
         .with(log);

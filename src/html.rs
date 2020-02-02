@@ -11,7 +11,7 @@ markup::define! {
                 meta[charset="utf-8"];
                 title {{title}}
                 // This path is fragile because it assumes that all pages are in the same directory.
-                link[rel="stylesheet", type="text/css", href="./static/style.css"];
+                link[rel="stylesheet", type="text/css", href="../static/style.css"];
             }
             body {{body}}
         }

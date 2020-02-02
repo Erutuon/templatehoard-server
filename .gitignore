@@ -5,3 +5,4 @@ entries
 *.lua
 *.old
 target
+template_redirects.json

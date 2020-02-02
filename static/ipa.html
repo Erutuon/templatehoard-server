@@ -4,13 +4,13 @@
 		<meta charset="utf-8">
 		<meta name="viewport" content="width=device-width, initial-scale=1">
 		<title>Search IPA</title>
-		<link rel="stylesheet" type="text/css" href="./static/style.css">
+		<link rel="stylesheet" type="text/css" href="../static/style.css">
 	</head>
 	<body>
-		<form class="ipa-form" method="get" action="./ipa">
+		<form class="search-form" method="get">
 			<fieldset>
 				<legend>Search IPA transcriptions</legend>
-				<p class="ipa-description">Searches transcriptions from <code>{{<a href="https://en.wiktionary.org/wiki/Template:IPA">IPA</a>}}</code> templates in the latest dump of the English Wiktionary.</p>
+				<p class="search-description">Searches transcriptions from <code>{{<a href="https://en.wiktionary.org/wiki/Template:IPA">IPA</a>}}</code> templates in the latest dump of the English Wiktionary.</p>
 				<div>
 					<label for="langs">Languages:
 						<!-- MAX_PARAM_LEN / 4 in ipa.rs -->
@@ -28,7 +28,7 @@
 					</label>
 				</div>
 				<div>
-					<label for="search"><a href="https://docs.rs/regex/1.3.3/regex/#syntax">Regex</a>:
+					<label for="regex"><a href="https://docs.rs/regex/1.3.3/regex/#syntax">Regex</a>:
 						<!-- MAX_PARAM_LEN / 4 in ipa.rs -->
 						<input type="search" maxlength="64" name="regex" id="regex"
 							autocomplete="off" placeholder="Rust regular expression">
