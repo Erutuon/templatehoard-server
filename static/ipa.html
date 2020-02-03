@@ -5,12 +5,22 @@
 		<meta name="viewport" content="width=device-width, initial-scale=1">
 		<title>Search IPA</title>
 		<link rel="stylesheet" type="text/css" href="../static/style.css">
+		<script type="text/javascript" src="../static/jquery-3.4.1.slim.min.js"></script>
+		<script type="text/javascript" src="../static/search.js"></script>
 	</head>
 	<body>
 		<form class="search-form" method="get">
 			<fieldset>
 				<legend>Search IPA transcriptions</legend>
-				<p class="search-description">Searches transcriptions from <code>{{<a href="https://en.wiktionary.org/wiki/Template:IPA">IPA</a>}}</code> templates in the latest dump of the English Wiktionary.</p>
+				<div class="search-description">
+					<p>Searches transcriptions from <code>{{<a href="https://en.wiktionary.org/wiki/Template:IPA">IPA</a>}}</code> templates in the latest dump of the English Wiktionary.</p>
+					<div class="more-info">
+						<dl>
+							<dt>nothing</dt><dd>all templates</dd>
+							<dt>language codes</dt><dd>all transcriptions of those languages; add plain text or regex or both to filter results</dd>
+					</dl>
+					</div>
+				</div>
 				<div>
 					<label for="langs">Languages:
 						<!-- MAX_PARAM_LEN / 4 in ipa.rs -->

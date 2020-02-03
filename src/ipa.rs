@@ -307,8 +307,9 @@ impl Display for IPAError {
 // is present, the language code (argument 1) must be be found in the list. If all
 // are `None`, all results are returned.
 fn ipa_search_results<'iter, 'template: 'iter, 'matcher: 'iter>(
-    deserializer: impl Iterator<Item = serde_cbor::Result<TemplatesInPage<'template>>>
-        + 'iter,
+    deserializer: &'iter mut (impl Iterator<
+        Item = serde_cbor::Result<TemplatesInPage<'template>>,
+    > + 'iter),
     langs: &'matcher Option<Langs>,
     search: &'matcher Option<String>,
     regex: &'matcher Option<RegexWrapper>,
@@ -380,12 +381,9 @@ fn do_search(
     let text =
         mmap_file(cbor_path).expect("could not memory map CBOR stream file");
 
-    let results = ipa_search_results(
-        Deserializer::from_slice(&text).into_iter(),
-        &langs,
-        &search,
-        &regex,
-    );
+    let mut pages = Deserializer::from_slice(&text).into_iter();
+
+    let results = ipa_search_results(&mut pages, &langs, &search, &regex);
 
     let args = Args {
         langs: langs.clone(),
@@ -394,7 +392,12 @@ fn do_search(
         limit,
         offset,
     };
-    print_template_search_results(results, args, "IPA search results")
+    let res =
+        print_template_search_results(results, args, "IPA search results");
+
+    dbg!(pages.byte_offset());
+
+    res
 }
 
 async fn print_err(

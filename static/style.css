@@ -11,12 +11,12 @@ body {
 }
 
 .search-form {
-	/*font-size: 120%;*/
 	width: 20em;
+	text-align: right;
+	/*font-size: 120%;*/
 }
 
-.search-form div {
-	text-align: right;
+.search-form {
 	display: grid;
 	margin: 0.3em 0;
 	/*font-size: inherit;*/
@@ -27,7 +27,41 @@ body {
 	border: 1px solid hsl(197, 71%, 90%);
 	border-radius: 0.5em;
 	padding: 0.3em 0.6em;
+	text-align: left;
 	font-size: 75%;
+}
+
+.search-description p {
+	margin: 0 0 0.1em;
+}
+
+.toggle-button {
+	display: inline-block;
+	border: 1px dotted lightgray;
+	padding: 0.1em;
+	color: blue;
+	cursor: pointer;
+}
+
+.more-info dl {
+	margin-top: 0.1em;
+}
+
+.more-info dt, .more-info dd {
+	display: list-item;
+}
+
+.more-info dt {
+	list-style-type: disc;
+	margin-left: 1.3em;
+}
+
+.more-info dt::after {
+	content: " ⯆";
+}
+
+.more-info dd {
+	list-style-type: none;
 }
 
 input {
@@ -46,7 +80,7 @@ input {
 
 a { text-decoration: none; }
 
-a:not([href]) { color: hsl(0, 0%, 53%); }
+#prev a:not([href]), #next a:not([href]), #up a:not([href]) { color: hsl(0, 0%, 53%); }
 
 table {
 	border-collapse: collapse;

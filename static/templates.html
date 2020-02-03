@@ -5,12 +5,25 @@
 		<meta name="viewport" content="width=device-width, initial-scale=1">
 		<title>Search template parameters</title>
 		<link rel="stylesheet" type="text/css" href="../static/style.css">
+		<script type="text/javascript" src="../static/jquery-3.4.1.slim.min.js"></script>
+		<script type="text/javascript" src="../static/search.js"></script>
 	</head>
 	<body>
 		<form class="search-form" method="get">
 			<fieldset>
 				<legend>Search template parameters</legend>
-				<p class="search-description">Searches template parameters from particular templates in the latest dump of the English Wiktionary.</p>
+				<div class="search-description">
+					<p>Searches template parameters from particular templates in the latest dump of the English Wiktionary.</p>
+					<div class="more-info">
+						<p>Various combinations are possible:</p>
+						<dl>
+							<dt>template</dt>
+							<dd>all instances of template</dd>
+							<dt>template, parameter</dt><dd>instances with that parameter</dd>
+							<dt>template, parameter, either plain text search or regex</dt><dd>all templates with parameter matching that search query</dd>
+						<dl>
+					</div>
+				</div>
 				<div>
 					<label for="parameter">Template:
 						<input type="search" maxlength="64" name="template" id="template" autocomplete="off"

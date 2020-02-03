@@ -1,6 +1,10 @@
 use env_logger;
 use log;
-use std::{convert::Infallible, fmt, num::NonZeroUsize};
+use std::{
+    convert::Infallible,
+    fmt,
+    num::NonZeroUsize,
+};
 use warp::{http::StatusCode, path, reject::Rejection, Filter, Reply};
 
 mod common;
