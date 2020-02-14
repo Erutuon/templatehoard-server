@@ -135,9 +135,16 @@ impl<'a> Serialize for ArgsId<'a> {
 impl Args {
     fn make_id(&self) -> serde_json::Result<String> {
         let Args {
-            template_name, matcher, offset, ..
+            template_name,
+            matcher,
+            offset,
+            ..
         } = self;
-        serde_json::to_string(&ArgsId { template_name, matcher, offset })
+        serde_json::to_string(&ArgsId {
+            template_name,
+            matcher,
+            offset,
+        })
     }
 }
 
@@ -348,7 +355,7 @@ fn filter_templates_by_parameter(
             args
         );
     }
-    
+
     let start_offset = if let Some(id) = id.as_ref() {
         let cache = cache.lock().unwrap();
         if let Some(&start_offset) = cache.get(id) {
@@ -387,13 +394,6 @@ fn filter_templates_by_parameter(
 
     if let Ok(id) = next_args.make_id() {
         let end_offset = start_offset + pages.byte_offset();
-        log::info!(
-            target: "all",
-            "parsed {} bytes from {} to {}",
-            end_offset - start_offset,
-            start_offset,
-            end_offset,
-        );
         let mut cache = cache.lock().unwrap();
         cache.insert(id, end_offset);
     }
