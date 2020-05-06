@@ -23,7 +23,7 @@ const parseDecimalInt = function(num) {
 }
 
 const showTemplate = function(template) {
-    if (false && template.text) {
+    if (template.text) {
         return template.text;
     } else {
         const parts = [];
@@ -107,6 +107,20 @@ const showResults = function() {
         return row;
     });
     const resultCount = rows.length;
+
+    const url = new URL(document.URL);
+    const params = new URLSearchParams(url.search);
+    const offset = Number(params.get("offset") || defaultOffset);
+    const limit = Number(params.get("limit") || defaultLimit);
+    encloseContentsInAnchor(
+        document.getElementById("prev"),
+        offset >= 0 ? changeParams(url, { offset: Math.max(0, offset - limit) }) : null,
+    );
+    encloseContentsInAnchor(
+        document.getElementById("next"),
+        resultCount >= limit ? changeParams(url, { offset: offset + limit }) : null,
+    );
+
     const table = elem("table");
     table.classList.add("search-results");
     const caption = elem(
@@ -126,19 +140,6 @@ const showResults = function() {
     table.appendChild(caption);
     table.appendChild(tableHeader);
     table.appendChild(tableBody);
-
-    const url = new URL(document.URL);
-    const params = new URLSearchParams(url.search);
-    const offset = Number(params.get("offset") || defaultOffset);
-    const limit = Number(params.get("limit") || defaultLimit);
-    encloseContentsInAnchor(
-        document.getElementById("prev"),
-        offset >= 0 ? changeParams(url, { offset: Math.max(0, offset - limit) }) : null,
-    );
-    encloseContentsInAnchor(
-        document.getElementById("next"),
-        resultCount >= limit ? changeParams(url, { offset: offset + limit }) : null,
-    );
 
     document.body.appendChild(table);
 };
