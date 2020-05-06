@@ -1,6 +1,7 @@
 use regex::{Error as RegexError, Regex};
 use serde::{Deserialize, Serialize, Serializer};
-use serde_cbor::Deserializer;
+use serde_cbor::{Deserializer, Error as CborError};
+use serde_json::Error as JsonError;
 use std::{
     borrow::Cow,
     // cmp::Ord,
@@ -12,14 +13,14 @@ use std::{
 };
 use unicase::UniCase;
 use warp::{
-    self, http::StatusCode, reject::Reject, reply::html, Filter, Rejection,
-    Reply,
+    self, http::StatusCode, reject::Reject, reply, Filter, Rejection, Reply,
 };
 
 use crate::common::{
-    mmap_file, print_template_search_results, RegexWrapper, TemplateBorrowed,
-    TemplatesInPage, TextOrHTML, TitleAndTemplates, WithLimitAndOffset,
+    mmap_file, RegexWrapper, SearchResults, TemplateBorrowed, TemplatesInPage,
+    TextOrHTML, TitleAndTemplates,
 };
+use crate::html::Page;
 
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
@@ -128,9 +129,9 @@ fn test_serialize_args() {
     let args = Args {
         langs: "en,de".parse().ok(),
         search: Some("kul".into()),
-        regex: Some(RegexWrapper(Regex::new("a[aeiou]").unwrap())),
+        regex: Some(Regex::new("a[aeiou]").unwrap().into()),
         offset: 0,
-        limit: Some(NonZeroUsize::new(500).unwrap()),
+        limit: NonZeroUsize::new(500).unwrap(),
     };
     // Check that langs are reordered.
     assert_eq!(
@@ -196,7 +197,7 @@ fn test_try_from_args() {
         search: Some("faɪnd".into()),
         regex: Some("".into()),
         offset: 0,
-        limit: None,
+        limit: Some(NonZeroUsize::new(500).unwrap()),
     };
 
     let actual = Args::try_from(query);
@@ -208,7 +209,7 @@ fn test_try_from_args() {
             search: Some(_),
             regex: None,
             offset: 0,
-            limit: None,
+            limit: _,
         })
     );
 
@@ -217,7 +218,7 @@ fn test_try_from_args() {
         search: Some("".into()),
         regex: Some("mæt͡ʃ".into()),
         offset: 0,
-        limit: None,
+        limit: Some(NonZeroUsize::new(500).unwrap()),
     };
 
     let actual = Args::try_from(query);
@@ -229,21 +230,9 @@ fn test_try_from_args() {
             search: None,
             regex: Some(_),
             offset: 0,
-            limit: None,
+            limit: _,
         })
     );
-}
-
-impl WithLimitAndOffset for Args {
-    fn get_offset(&self) -> usize {
-        self.offset
-    }
-    fn set_offset(&mut self, offset: usize) {
-        self.offset = offset;
-    }
-    fn get_limit(&self) -> NonZeroUsize {
-        self.limit
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -252,7 +241,7 @@ enum IPAError {
     TooLong,
     LangsErr(String),
     RegexError(RegexError),
-    CBORError(String),
+    CborError(String),
     NoLimit,
 }
 
@@ -295,7 +284,7 @@ impl Display for IPAError {
                 chars
             ),
             RegexError(e) => write!(f, "{}", e),
-            CBORError(e) => write!(f, "{}", e),
+            CborError(e) => write!(f, "{}", e),
             NoLimit => write!(f, "A limit is required."),
         }
     }
@@ -368,6 +357,32 @@ fn ipa_search_results<'iter, 'template: 'iter, 'matcher: 'iter>(
     })
 }
 
+enum SearchError {
+    Json(JsonError),
+    Cbor(CborError),
+}
+
+impl From<CborError> for SearchError {
+    fn from(e: CborError) -> Self {
+        SearchError::Cbor(e)
+    }
+}
+
+impl From<JsonError> for SearchError {
+    fn from(e: JsonError) -> Self {
+        SearchError::Json(e)
+    }
+}
+
+impl ToString for SearchError {
+    fn to_string(&self) -> String {
+        match self {
+            Self::Json(e) => e.to_string(),
+            Self::Cbor(e) => e.to_string(),
+        }
+    }
+}
+
 fn do_search(
     Args {
         langs,
@@ -377,27 +392,22 @@ fn do_search(
         offset,
     }: Args,
     cbor_path: &str,
-) -> Result<String, serde_cbor::Error> {
+) -> Result<String, SearchError> {
     let text =
         mmap_file(cbor_path).expect("could not memory map CBOR stream file");
 
     let mut pages = Deserializer::from_slice(&text).into_iter();
 
-    let results = ipa_search_results(&mut pages, &langs, &search, &regex);
+    let mut results = ipa_search_results(&mut pages, &langs, &search, &regex)
+        .skip(offset)
+        .take(limit.get())
+        .collect::<Result<Vec<_>, _>>()?;
+    results.sort_unstable_by(|a, b| a.title.cmp(&b.title));
 
-    let args = Args {
-        langs: langs.clone(),
-        search: search.clone(),
-        regex: regex.clone(),
-        limit,
-        offset,
-    };
-    let res =
-        print_template_search_results(results, args, "IPA search results");
-
-    dbg!(pages.byte_offset());
-
-    res
+    Ok(serde_json::to_string(&SearchResults {
+        complete: results.len() < limit.get(),
+        templates: results,
+    })?)
 }
 
 async fn print_err(
@@ -472,9 +482,19 @@ pub fn handler<'a>(
                 "{:?}",
                 &args,
             );
-            do_search(args, cbor_path).map(html).map_err(|e| {
-                warp::reject::custom(IPAError::CBORError(e.to_string()))
-            })
+            do_search(args, cbor_path)
+                .map(|json| {
+                    reply::html(
+                        Page {
+                            title: "IPA search results",
+                            json,
+                        }
+                        .to_string(),
+                    )
+                })
+                .map_err(|e| {
+                    warp::reject::custom(IPAError::CborError(e.to_string()))
+                })
         })
         .recover(move |e| print_err(e, search_page_path, max_query_len))
 }

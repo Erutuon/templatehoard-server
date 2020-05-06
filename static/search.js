@@ -1,11 +1,21 @@
+"use strict";
+
 const toggle = function () {
 	this.displayed = !this.displayed;
 	this.style.display = this.displayed ? null : "none";
 	this.toggleButton.textContent = this.displayed ? "hide more info" : "show more info";
 };
 
+const onload = function(func) {
+	if (document.readyState !== 'loading') {
+		func();
+	} else {
+		document.addEventListener('DOMContentLoaded', func);
+	}
+}
+
 // Toggle search explanation.
-$(function() {
+onload(function() {
 	Array.prototype.forEach.call(document.getElementsByClassName("more-info"), function(elem) {
 		const button = document.createElement("div");
 		button.classList.add("toggle-button");

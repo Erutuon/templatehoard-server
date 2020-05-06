@@ -2,14 +2,13 @@ use log;
 use once_cell::sync::OnceCell;
 use regex::Error as RegexError;
 use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
-use serde_cbor::{Deserializer, Result as CBORResult};
-use serde_json;
+use serde_cbor::{Deserializer, Error as CborError, Result as CborResult};
+use serde_json::{self, Error as JsonError};
 use std::{
     collections::HashMap,
     convert::{Infallible, TryFrom},
     fmt::{Display, Formatter, Result as FmtResult},
     num::NonZeroUsize,
-    sync::{Arc, Mutex},
 };
 use unicase::UniCase;
 use warp::{
@@ -18,9 +17,10 @@ use warp::{
 };
 
 use crate::common::{
-    mmap_file, print_template_search_results, RegexWrapper, TemplateBorrowed,
-    TemplatesInPage, TextOrHTML, TitleAndTemplates, WithLimitAndOffset,
+    mmap_file, RegexWrapper, SearchResults, TemplateBorrowed, TemplatesInPage,
+    TextOrHTML, TitleAndTemplates,
 };
+use crate::html::Page;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
@@ -132,22 +132,6 @@ impl<'a> Serialize for ArgsId<'a> {
     }
 }
 
-impl Args {
-    fn make_id(&self) -> serde_json::Result<String> {
-        let Args {
-            template_name,
-            matcher,
-            offset,
-            ..
-        } = self;
-        serde_json::to_string(&ArgsId {
-            template_name,
-            matcher,
-            offset,
-        })
-    }
-}
-
 fn spaces_to_underscores(s: &mut str) {
     unsafe {
         for b in s.as_bytes_mut().iter_mut() {
@@ -246,7 +230,8 @@ enum TemplatesError {
     TooLong,
     BothStringAndRegex,
     RegexError(RegexError),
-    CBORError(String),
+    CborError(String),
+    JsonError(String),
     NoLimit,
     TemplateDumpNotFound(String),
 }
@@ -259,11 +244,18 @@ impl From<RegexError> for TemplatesError {
     }
 }
 
-impl From<serde_cbor::Error> for TemplatesError {
-    fn from(err: serde_cbor::Error) -> Self {
-        TemplatesError::CBORError(err.to_string())
+impl From<CborError> for TemplatesError {
+    fn from(err: CborError) -> Self {
+        TemplatesError::CborError(err.to_string())
     }
 }
+
+impl From<JsonError> for TemplatesError {
+    fn from(err: JsonError) -> Self {
+        TemplatesError::JsonError(err.to_string())
+    }
+}
+
 impl Display for TemplatesError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         use TemplatesError::*;
@@ -282,7 +274,8 @@ impl Display for TemplatesError {
             ),
             BothStringAndRegex => write!(f, "Choose either “search” or “regex”."),
             RegexError(e) => write!(f, "{}", e),
-            CBORError(e) => write!(f, "{}", e),
+            CborError(e) => write!(f, "{}", e),
+            JsonError(e) => write!(f, "{}", e),
             NoLimit => write!(f, "A limit is required."),
             TemplateDumpNotFound(t) => write!(
                 f,
@@ -293,23 +286,11 @@ impl Display for TemplatesError {
     }
 }
 
-impl WithLimitAndOffset for Args {
-    fn get_offset(&self) -> usize {
-        self.offset
-    }
-    fn set_offset(&mut self, offset: usize) {
-        self.offset = offset;
-    }
-    fn get_limit(&self) -> NonZeroUsize {
-        self.limit
-    }
-}
-
 fn do_search<'iter, 'template: 'iter, 'matcher: 'iter>(
-    pages: &'iter mut (impl Iterator<Item = CBORResult<TemplatesInPage<'template>>>
+    pages: &'iter mut (impl Iterator<Item = CborResult<TemplatesInPage<'template>>>
                     + 'iter),
     matcher: &'matcher Option<ParameterMatcher>,
-) -> impl Iterator<Item = CBORResult<TitleAndTemplates<'template>>> + 'iter {
+) -> impl Iterator<Item = CborResult<TitleAndTemplates<'template>>> + 'iter {
     pages.filter_map(move |page| {
         page.map(|p| {
             let templates = p.templates.into_iter();
@@ -335,10 +316,7 @@ fn do_search<'iter, 'template: 'iter, 'matcher: 'iter>(
     })
 }
 
-fn filter_templates_by_parameter(
-    args: Args,
-    cache: Arc<Mutex<HashMap<String, usize>>>,
-) -> Result<String, TemplatesError> {
+fn filter_templates_by_parameter(args: Args) -> Result<String, TemplatesError> {
     let cbor_path = format!("cbor/{}.cbor", &args.template_name);
     let text = if let Ok(t) = mmap_file(&cbor_path) {
         t
@@ -347,58 +325,21 @@ fn filter_templates_by_parameter(
         return Err(TemplatesError::TemplateDumpNotFound(args.template_name));
     };
 
-    let id = args.make_id().ok();
-    if id.is_none() {
-        log::error!(
-            target: "all",
-            "failed to serialize {:?}",
-            args
-        );
-    }
-
-    let start_offset = if let Some(id) = id.as_ref() {
-        let cache = cache.lock().unwrap();
-        if let Some(&start_offset) = cache.get(id) {
-            if start_offset >= text.len() {
-                log::error!(
-                    target: "all",
-                    "start_offset {} for args {} is out of bounds of slice of length {}",
-                    start_offset,
-                    id,
-                    text.len(),
-                );
-            }
-            start_offset
-        } else {
-            0
-        }
-    } else {
-        0
-    };
-    let slice = if let Some(slice) = text.get(start_offset..) {
-        slice
-    } else {
-        b""
-    };
-
-    let mut pages = Deserializer::from_slice(slice).into_iter();
+    let mut pages = Deserializer::from_slice(&text).into_iter();
 
     // So that `args` can be sent to `print_template_search_results`.
     let matcher = args.matcher.clone();
-    let matches = do_search(&mut pages, &matcher);
-    let mut next_args = args.clone();
-    next_args.offset += args.limit.get();
-    let res =
-        print_template_search_results(matches, args, "Template search results")
-            .map_err(|e| e.into());
+    let mut results = do_search(&mut pages, &matcher)
+        .skip(args.offset)
+        .take(args.limit.get())
+        .collect::<Result<Vec<_>, _>>()?;
 
-    if let Ok(id) = next_args.make_id() {
-        let end_offset = start_offset + pages.byte_offset();
-        let mut cache = cache.lock().unwrap();
-        cache.insert(id, end_offset);
-    }
+    results.sort_unstable_by(|a, b| a.title.cmp(&b.title));
 
-    res
+    Ok(serde_json::to_string(&SearchResults {
+        complete: results.len() < args.limit.get(),
+        templates: results,
+    })?)
 }
 
 fn print_err(
@@ -480,7 +421,6 @@ pub fn handler<'a>(
                     .collect(),
             )
         });
-    let cache = Arc::new(Mutex::new(HashMap::new()));
 
     warp::query::<Query>()
         .and_then(move |mut params: Query| async move {
@@ -500,18 +440,24 @@ pub fn handler<'a>(
                 Args::try_from(params).map_err(warp::reject::custom)
             }
         })
-        .and_then(move |args| {
-            let cache = Arc::clone(&cache);
-            async move {
-                log::info!(
-                    target: "all",
-                    "{:?}",
-                    &args,
-                );
-                filter_templates_by_parameter(args, cache)
-                    .map(html)
-                    .map_err(warp::reject::custom)
-            }
+        .and_then(move |args| async move {
+            log::info!(
+                target: "all",
+                "{:?}",
+                &args,
+            );
+
+            filter_templates_by_parameter(args)
+                .map(|json| {
+                    html(
+                        Page {
+                            title: "Template search results",
+                            json,
+                        }
+                        .to_string(),
+                    )
+                })
+                .map_err(warp::reject::custom)
         })
         .recover(move |e| async move {
             print_err(e, search_page_path, max_query_len)

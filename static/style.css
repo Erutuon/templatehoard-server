@@ -102,3 +102,7 @@ th, td {
 	font-family: monospace;
 	line-height: 160%;
 }
+
+#search-results-json {
+	display: none;
+}
