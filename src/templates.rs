@@ -1,18 +1,16 @@
 use log;
 use once_cell::sync::OnceCell;
-use regex::Error as RegexError;
 use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
-use serde_cbor::{Deserializer, Error as CborError, Result as CborResult};
-use serde_json::{self, Error as JsonError};
+use serde_cbor::{Deserializer, Result as CborResult};
+use serde_json;
 use std::{
     collections::HashMap,
     convert::{Infallible, TryFrom},
-    fmt::{Display, Formatter, Result as FmtResult},
     num::NonZeroUsize,
 };
 use unicase::UniCase;
 use warp::{
-    self, http::StatusCode, reject::Reject, reply::html, Filter, Rejection,
+    self, http::StatusCode, reply::html, Filter, Rejection,
     Reply,
 };
 
@@ -20,6 +18,7 @@ use crate::common::{
     mmap_file, RegexWrapper, SearchResults, TemplateBorrowed, TemplatesInPage,
     TextOrHTML, TitleAndTemplates,
 };
+use crate::error::Error;
 use crate::html::Page;
 
 #[derive(Debug, Clone, Serialize)]
@@ -79,15 +78,12 @@ impl Query {
             || self.regex.is_some()
             || self.limit.is_some()
     }
-    fn any_longer_than(&self, limit: usize) -> bool {
-        [
-            self.template.as_ref(),
-            self.parameter.as_ref(),
-            self.search.as_ref(),
-            self.regex.as_ref(),
-        ]
-        .iter()
-        .any(|param| param.as_ref().map(|s| s.len() > limit).unwrap_or(false))
+    fn find_longer_than(&self, limit: usize) -> Option<&'static str> {
+        param_map! [self: [template, parameter, search, regex]]
+            .iter()
+            .find_map(|(key, value)| {
+                value.as_ref().filter(|s| s.len() > limit).map(|_| *key)
+            })
     }
 }
 
@@ -143,10 +139,10 @@ fn spaces_to_underscores(s: &mut str) {
 }
 
 impl TryFrom<Query> for Args {
-    type Error = TemplatesError;
+    type Error = Error;
 
     fn try_from(query: Query) -> Result<Self, Self::Error> {
-        use TemplatesError::*;
+        use Error::*;
 
         let Query {
             template,
@@ -223,69 +219,6 @@ impl Serialize for Args {
     }
 }
 
-#[derive(Debug, Clone)]
-enum TemplatesError {
-    MissingTemplate,
-    UnusedMatcher,
-    TooLong,
-    BothStringAndRegex,
-    RegexError(RegexError),
-    CborError(String),
-    JsonError(String),
-    NoLimit,
-    TemplateDumpNotFound(String),
-}
-
-impl Reject for TemplatesError {}
-
-impl From<RegexError> for TemplatesError {
-    fn from(err: RegexError) -> Self {
-        Self::RegexError(err)
-    }
-}
-
-impl From<CborError> for TemplatesError {
-    fn from(err: CborError) -> Self {
-        TemplatesError::CborError(err.to_string())
-    }
-}
-
-impl From<JsonError> for TemplatesError {
-    fn from(err: JsonError) -> Self {
-        TemplatesError::JsonError(err.to_string())
-    }
-}
-
-impl Display for TemplatesError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        use TemplatesError::*;
-        match self {
-            MissingTemplate => write!(
-                f,
-                "“template” parameter is missing.",
-            ),
-            UnusedMatcher => write!(
-                f,
-                "“search”, or “regex” will not be used because “parameter” is not present."
-            ),
-            TooLong => write!(
-                f,
-                "One of “template”, “parameter”, “search”, or “regex” was too long.",
-            ),
-            BothStringAndRegex => write!(f, "Choose either “search” or “regex”."),
-            RegexError(e) => write!(f, "{}", e),
-            CborError(e) => write!(f, "{}", e),
-            JsonError(e) => write!(f, "{}", e),
-            NoLimit => write!(f, "A limit is required."),
-            TemplateDumpNotFound(t) => write!(
-                f,
-                "The template {{{{{template}}}}} has not been dumped.",
-                template = t
-            ),
-        }
-    }
-}
-
 fn do_search<'iter, 'template: 'iter, 'matcher: 'iter>(
     pages: &'iter mut (impl Iterator<Item = CborResult<TemplatesInPage<'template>>>
                     + 'iter),
@@ -316,14 +249,11 @@ fn do_search<'iter, 'template: 'iter, 'matcher: 'iter>(
     })
 }
 
-fn filter_templates_by_parameter(args: Args) -> Result<String, TemplatesError> {
+fn filter_templates_by_parameter(args: Args) -> Result<String, Error> {
     let cbor_path = format!("cbor/{}.cbor", &args.template_name);
-    let text = if let Ok(t) = mmap_file(&cbor_path) {
-        t
-    } else {
-        // log error?
-        return Err(TemplatesError::TemplateDumpNotFound(args.template_name));
-    };
+    let text = mmap_file(&cbor_path).map_err(|e| {
+        Error::template_dump_not_found(&args.template_name, e)
+    })?;
 
     let mut pages = Deserializer::from_slice(&text).into_iter();
 
@@ -356,8 +286,8 @@ fn print_err(
         "“parameter” are required, and one of “search” and “regex” is ",
         "required; “offset” and “limit” are optional.\n"
     );
-    let err_text = if let Some(e) = err.find::<TemplatesError>() {
-        use TemplatesError::*;
+    let err_text = if let Some(e) = err.find::<Error>() {
+        use Error::*;
         match &e {
             MissingTemplate => {
                 if let Ok(search_page) =
@@ -375,7 +305,7 @@ fn print_err(
                 status = Some(StatusCode::INTERNAL_SERVER_ERROR);
                 Text(Borrowed("Internal server error\n"))
             }
-            TooLong => Text(Owned(format!(
+            TooLong(_) => Text(Owned(format!(
                 "{} The limit is {}.",
                 e.to_string(),
                 max_query_len.get()
@@ -434,8 +364,8 @@ pub fn handler<'a>(
                         redirects.get(&template).cloned().or(Some(template));
                 }
             }
-            if params.any_longer_than(max_query_len.get()) {
-                Err(warp::reject::custom(TemplatesError::TooLong))
+            if let Some(key) = params.find_longer_than(max_query_len.get()) {
+                Err(warp::reject::custom(Error::TooLong(key)))
             } else {
                 Args::try_from(params).map_err(warp::reject::custom)
             }

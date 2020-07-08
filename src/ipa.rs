@@ -1,25 +1,24 @@
-use regex::{Error as RegexError, Regex};
+use regex::Regex;
 use serde::{Deserialize, Serialize, Serializer};
-use serde_cbor::{Deserializer, Error as CborError};
-use serde_json::Error as JsonError;
+use serde_cbor::Deserializer;
 use std::{
     borrow::Cow,
     // cmp::Ord,
     collections::BTreeSet,
     convert::{Infallible, TryFrom},
-    fmt::{Display, Formatter, Result as FmtResult},
     num::NonZeroUsize,
     str::FromStr,
 };
 use unicase::UniCase;
 use warp::{
-    self, http::StatusCode, reject::Reject, reply, Filter, Rejection, Reply,
+    self, http::StatusCode, reply, Filter, Rejection, Reply,
 };
 
 use crate::common::{
     mmap_file, RegexWrapper, SearchResults, TemplateBorrowed, TemplatesInPage,
     TextOrHTML, TitleAndTemplates,
 };
+use crate::error::Error;
 use crate::html::Page;
 
 #[derive(Deserialize, Debug)]
@@ -43,11 +42,11 @@ impl Query {
             || self.limit.is_some()
     }
 
-    fn any_longer_than(&self, limit: usize) -> bool {
-        [&self.langs, &self.search, &self.regex]
+    fn find_longer_than(&self, limit: usize) -> Option<&'static str> {
+        param_map![self: [langs, search, regex]]
             .iter()
-            .any(|param| {
-                param.as_ref().map(|s| s.len() > limit).unwrap_or(false)
+            .find_map(|(key, value)| {
+                value.as_ref().filter(|s| s.len() > limit).map(|_| key).copied()
             })
     }
 }
@@ -78,7 +77,7 @@ impl Langs {
     }
 }
 
-struct LangsErr(String);
+pub struct LangsErr(pub String);
 
 impl FromStr for Langs {
     type Err = LangsErr;
@@ -144,13 +143,13 @@ fn test_serialize_args() {
 }
 
 impl TryFrom<Query> for Args {
-    type Error = IPAError;
+    type Error = Error;
 
     fn try_from(query: Query) -> Result<Self, Self::Error> {
-        use IPAError::*;
+        use Error::*;
 
         if !query.is_some() {
-            Err(MissingParameters)
+            Err(MissingParameters(&["langs", "search", "regex", "limit"]))
         } else {
             let Query {
                 mut langs,
@@ -235,61 +234,6 @@ fn test_try_from_args() {
     );
 }
 
-#[derive(Debug, Clone)]
-enum IPAError {
-    MissingParameters,
-    TooLong,
-    LangsErr(String),
-    RegexError(RegexError),
-    CborError(String),
-    NoLimit,
-}
-
-impl Reject for IPAError {}
-
-impl From<LangsErr> for IPAError {
-    fn from(LangsErr(chars): LangsErr) -> Self {
-        IPAError::LangsErr(chars)
-    }
-}
-
-impl From<RegexError> for IPAError {
-    fn from(err: RegexError) -> Self {
-        IPAError::RegexError(err)
-    }
-}
-
-impl Display for IPAError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        use IPAError::*;
-        match self {
-            MissingParameters => write!(
-                f,
-                concat!(
-                    r#"At least one query parameter, "search" or "langs" "#,
-                    "is required. Append one of the following to the URL:
-
-?search=<search text>
-?langs=<language codes separated by ,>
-?search=<search text>&langs=<language codes separated by ,>"
-                ),
-            ),
-            TooLong => write!(
-                f,
-                r#"One or more of "langs" or "search" or "regex" was too long."#,
-            ),
-            LangsErr(chars) => write!(
-                f,
-                r#"The "langs" parameter contains the following bad characters: "{}"."#,
-                chars
-            ),
-            RegexError(e) => write!(f, "{}", e),
-            CborError(e) => write!(f, "{}", e),
-            NoLimit => write!(f, "A limit is required."),
-        }
-    }
-}
-
 // Returns an iterator filtered by the language codes, search string,
 // and regex (if any). If the search string or regex are present, returns templates
 // containing transcriptions that match each of them; if the list of language codes
@@ -357,32 +301,6 @@ fn ipa_search_results<'iter, 'template: 'iter, 'matcher: 'iter>(
     })
 }
 
-enum SearchError {
-    Json(JsonError),
-    Cbor(CborError),
-}
-
-impl From<CborError> for SearchError {
-    fn from(e: CborError) -> Self {
-        SearchError::Cbor(e)
-    }
-}
-
-impl From<JsonError> for SearchError {
-    fn from(e: JsonError) -> Self {
-        SearchError::Json(e)
-    }
-}
-
-impl ToString for SearchError {
-    fn to_string(&self) -> String {
-        match self {
-            Self::Json(e) => e.to_string(),
-            Self::Cbor(e) => e.to_string(),
-        }
-    }
-}
-
 fn do_search(
     Args {
         langs,
@@ -392,9 +310,11 @@ fn do_search(
         offset,
     }: Args,
     cbor_path: &str,
-) -> Result<String, SearchError> {
+) -> Result<String, Error> {
     let text =
-        mmap_file(cbor_path).expect("could not memory map CBOR stream file");
+        mmap_file(cbor_path).map_err(|e| {
+            Error::template_dump_not_found("IPA", e)
+        })?;
 
     let mut pages = Deserializer::from_slice(&text).into_iter();
 
@@ -418,9 +338,9 @@ async fn print_err(
     let mut status = None;
     use Cow::*;
     use TextOrHTML::*;
-    let err_txt = if let Some(e) = err.find::<IPAError>() {
+    let err_txt = if let Some(e) = err.find::<Error>() {
         match &e {
-            IPAError::MissingParameters => {
+            Error::MissingParameters(_) => {
                 if let Ok(search_page) =
                     std::fs::read_to_string(&search_page_path)
                 {
@@ -432,11 +352,11 @@ async fn print_err(
                 }
             }
             // Limit should have been set before `Query` was converted into `Args`.
-            IPAError::NoLimit => {
+            Error::NoLimit => {
                 status = Some(StatusCode::INTERNAL_SERVER_ERROR);
                 Text(Borrowed("Internal server error\n"))
             }
-            IPAError::TooLong => Text(Owned(format!(
+            Error::TooLong(_) => Text(Owned(format!(
                 "{} The limit is {}.",
                 e.to_string(),
                 max_query_len.get()
@@ -470,8 +390,8 @@ pub fn handler<'a>(
                 params.limit =
                     params.limit.map(|l| l.min(max_limit)).or(Some(max_limit));
             }
-            if params.any_longer_than(max_query_len.get()) {
-                Err(warp::reject::custom(IPAError::TooLong))
+            if let Some(key) = params.find_longer_than(max_query_len.get()) {
+                Err(warp::reject::custom(Error::TooLong(key)))
             } else {
                 Args::try_from(params).map_err(warp::reject::custom)
             }
@@ -493,7 +413,7 @@ pub fn handler<'a>(
                     )
                 })
                 .map_err(|e| {
-                    warp::reject::custom(IPAError::CborError(e.to_string()))
+                    warp::reject::custom(e)
                 })
         })
         .recover(move |e| print_err(e, search_page_path, max_query_len))

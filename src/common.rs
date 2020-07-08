@@ -199,3 +199,9 @@ pub struct SearchResults<'a> {
     pub complete: bool,
     pub templates: Vec<TitleAndTemplates<'a>>,
 }
+
+macro_rules! param_map {
+    ($struct:ident: [$($field:ident),* $(,)?]) => {{
+        [$((stringify!($field), &$struct.$field)),*]
+    }}
+}

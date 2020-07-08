@@ -3,11 +3,13 @@ use log;
 use std::{convert::Infallible, fmt, num::NonZeroUsize};
 use warp::{http::StatusCode, path, reject::Rejection, Filter, Reply};
 
+#[macro_use]
 mod common;
 mod html;
 mod ipa;
 mod redirect;
 mod templates;
+mod error;
 
 struct OptFmt<T>(Option<T>);
 
