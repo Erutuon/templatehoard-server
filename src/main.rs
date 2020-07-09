@@ -47,6 +47,15 @@ macro_rules! crash_with_error {
     }}
 }
 
+macro_rules! canonicalize_and_bool_method {
+    ($path:ident.$method:ident()) => {
+        $path
+            .canonicalize()
+            .map(|p| p.$method())
+            .unwrap_or(false)
+    }
+}
+
 fn parse_args(args: impl IntoIterator<Item = String>) -> Args {
     let mut options = Options::new();
     options.reqopt(
@@ -64,19 +73,20 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Args {
             let cbor_dir: PathBuf = parsed.opt_str("cbor").unwrap().into();
             let redirects: Option<PathBuf> =
                 parsed.opt_str("redirects").map(|p| p.into());
-            if !static_dir.is_dir() {
+            if !canonicalize_and_bool_method!(static_dir.is_dir())
+            {
                 crash_with_error!(
                     "{} is not a directory",
                     static_dir.display()
                 );
-            } else if !cbor_dir.is_dir() {
-                crash_with_error!("{} is not a directory", cbor_dir.display());
-            } else if redirects.as_ref().map(|r| !r.is_file()).unwrap_or(false)
+            } else if !canonicalize_and_bool_method!(cbor_dir.is_dir())
             {
-                crash_with_error!(
-                    "{} is not a file",
-                    redirects.unwrap().display()
-                );
+                crash_with_error!("{} is not a directory", cbor_dir.display());
+            } else if let Some(redirects) = redirects.as_ref() {
+                if !canonicalize_and_bool_method!(redirects.is_file())
+                {
+                    crash_with_error!("{} is not a file", redirects.display());
+                }
             }
             let port: u16 = parsed
                 .opt_str("port")
