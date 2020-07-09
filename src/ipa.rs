@@ -7,12 +7,12 @@ use std::{
     collections::BTreeSet,
     convert::{Infallible, TryFrom},
     num::NonZeroUsize,
+    path::{Path, PathBuf},
     str::FromStr,
+    sync::Arc,
 };
 use unicase::UniCase;
-use warp::{
-    self, http::StatusCode, reply, Filter, Rejection, Reply,
-};
+use warp::{self, http::StatusCode, reply, Filter, Rejection, Reply};
 
 use crate::common::{
     mmap_file, RegexWrapper, SearchResults, TemplateBorrowed, TemplatesInPage,
@@ -43,11 +43,15 @@ impl Query {
     }
 
     fn find_longer_than(&self, limit: usize) -> Option<&'static str> {
-        param_map![self: [langs, search, regex]]
-            .iter()
-            .find_map(|(key, value)| {
-                value.as_ref().filter(|s| s.len() > limit).map(|_| key).copied()
-            })
+        param_map![self: [langs, search, regex]].iter().find_map(
+            |(key, value)| {
+                value
+                    .as_ref()
+                    .filter(|s| s.len() > limit)
+                    .map(|_| key)
+                    .copied()
+            },
+        )
     }
 }
 
@@ -309,12 +313,10 @@ fn do_search(
         limit,
         offset,
     }: Args,
-    cbor_path: &str,
+    cbor_path: &Path,
 ) -> Result<String, Error> {
-    let text =
-        mmap_file(cbor_path).map_err(|e| {
-            Error::template_dump_not_found("IPA", e)
-        })?;
+    let text = mmap_file(cbor_path)
+        .map_err(|e| Error::template_dump_not_found("IPA", e))?;
 
     let mut pages = Deserializer::from_slice(&text).into_iter();
 
@@ -332,7 +334,7 @@ fn do_search(
 
 async fn print_err(
     err: Rejection,
-    search_page_path: &str,
+    search_page_path: Arc<Path>,
     max_query_len: NonZeroUsize,
 ) -> Result<impl Reply, Infallible> {
     let mut status = None;
@@ -378,12 +380,15 @@ async fn print_err(
     ))
 }
 
-pub fn handler<'a>(
-    cbor_path: &'a str,
-    search_page_path: &'a str,
+pub fn handler(
+    cbor_path: PathBuf,
+    search_page_path: PathBuf,
     max_limit: NonZeroUsize,
     max_query_len: NonZeroUsize,
-) -> impl Filter<Extract = (impl Reply,), Error = Infallible> + Clone + 'a {
+) -> impl Filter<Extract = (impl Reply,), Error = Infallible> + Clone {
+    let cbor_path: Arc<Path> = cbor_path.into();
+    let search_page_path: Arc<Path> = search_page_path.into();
+    let search_page_path = Arc::clone(&search_page_path);
     warp::query::<Query>()
         .and_then(move |mut params: Query| async move {
             if params.is_some() {
@@ -396,25 +401,28 @@ pub fn handler<'a>(
                 Args::try_from(params).map_err(warp::reject::custom)
             }
         })
-        .and_then(move |args| async move {
-            log::info!(
-                target: "all",
-                "{:?}",
-                &args,
-            );
-            do_search(args, cbor_path)
-                .map(|json| {
-                    reply::html(
-                        Page {
-                            title: "IPA search results",
-                            json,
-                        }
-                        .to_string(),
-                    )
-                })
-                .map_err(|e| {
-                    warp::reject::custom(e)
-                })
+        .and_then(move |args| {
+            let cbor_path = Arc::clone(&cbor_path);
+            async move {
+                log::info!(
+                    target: "all",
+                    "{:?}",
+                    &args,
+                );
+                do_search(args, &*cbor_path)
+                    .map(|json| {
+                        reply::html(
+                            Page {
+                                title: "IPA search results",
+                                json,
+                            }
+                            .to_string(),
+                        )
+                    })
+                    .map_err(|e| warp::reject::custom(e))
+            }
         })
-        .recover(move |e| print_err(e, search_page_path, max_query_len))
+        .recover(move |e| {
+            print_err(e, Arc::clone(&search_page_path), max_query_len)
+        })
 }

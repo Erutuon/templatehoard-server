@@ -9,6 +9,7 @@ use std::{
     fs::File,
     io::Result as IoResult,
     ops::Deref,
+    path::Path,
     str::FromStr,
 };
 use unicase::UniCase;
@@ -175,7 +176,7 @@ impl Serialize for RegexWrapper {
     }
 }
 
-pub fn mmap_file(path: &str) -> IoResult<Mmap> {
+pub fn mmap_file(path: &Path) -> IoResult<Mmap> {
     let file = File::open(path)?;
     unsafe { Mmap::map(&file) }
 }

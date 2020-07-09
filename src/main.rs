@@ -1,15 +1,18 @@
 use env_logger;
+use getopts::Options;
 use log;
-use std::{convert::Infallible, fmt, num::NonZeroUsize};
+use std::{
+    convert::Infallible, fmt, num::NonZeroUsize, path::PathBuf, process::exit,
+};
 use warp::{http::StatusCode, path, reject::Rejection, Filter, Reply};
 
 #[macro_use]
 mod common;
+mod error;
 mod html;
 mod ipa;
 mod redirect;
 mod templates;
-mod error;
 
 struct OptFmt<T>(Option<T>);
 
@@ -30,31 +33,94 @@ async fn print_err(err: Rejection) -> Result<impl Reply, Infallible> {
     ))
 }
 
+struct Args {
+    static_dir: PathBuf,
+    cbor_dir: PathBuf,
+    port: u16,
+    redirects: Option<PathBuf>,
+}
+
+macro_rules! crash_with_error {
+    ($($expr:expr),* $(,)?) => {{
+        eprintln!($($expr),*);
+        exit(1);
+    }}
+}
+
+fn parse_args(args: impl IntoIterator<Item = String>) -> Args {
+    let mut options = Options::new();
+    options.reqopt(
+        "c",
+        "cbor",
+        "path to directory of CBOR template dump files",
+        "PATH",
+    );
+    options.reqopt("s", "static", "path to directory of static files", "PATH");
+    options.optopt("r", "redirects", "path to template redirects JSON", "PATH");
+    options.optopt("p", "port", "port number to listen at", "PORT");
+    match options.parse(args) {
+        Ok(parsed) => {
+            let static_dir: PathBuf = parsed.opt_str("static").unwrap().into();
+            let cbor_dir: PathBuf = parsed.opt_str("cbor").unwrap().into();
+            let redirects: Option<PathBuf> =
+                parsed.opt_str("redirects").map(|p| p.into());
+            if !static_dir.is_dir() {
+                crash_with_error!(
+                    "{} is not a directory",
+                    static_dir.display()
+                );
+            } else if !cbor_dir.is_dir() {
+                crash_with_error!("{} is not a directory", cbor_dir.display());
+            } else if redirects.as_ref().map(|r| !r.is_file()).unwrap_or(false)
+            {
+                crash_with_error!(
+                    "{} is not a file",
+                    redirects.unwrap().display()
+                );
+            }
+            let port: u16 = parsed
+                .opt_str("port")
+                .map(|p| {
+                    p.parse().unwrap_or_else(|_| {
+                        crash_with_error!("{} is not a valid port number", p)
+                    })
+                })
+                .unwrap_or(3030);
+            Args {
+                static_dir,
+                cbor_dir,
+                redirects,
+                port,
+            }
+        }
+        Err(e) => {
+            crash_with_error!("{}", e);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     env_logger::init();
-    let root = std::env::args().nth(1);
+    let args = parse_args(std::env::args().skip(1));
     let route = warp::get();
-    let route = if let Some(r) = root {
-        route.and(path(r)).boxed()
-    } else {
-        route.boxed()
-    };
     let results_limit = NonZeroUsize::new(500).unwrap();
     let query_limit = NonZeroUsize::new(256).unwrap();
     let ipa_path = path!("ipa").and(ipa::handler(
-        "cbor/IPA.cbor",
-        "static/ipa.html",
+        args.cbor_dir.join("IPA.cbor"),
+        args.static_dir.join("ipa.html"),
         results_limit,
         query_limit,
     ));
     let templates_path = path!("templates").and(templates::handler(
-        "static/templates.html",
-        "template_redirects.json",
+        args.static_dir.join("templates.html"),
+        args.redirects,
+        args.cbor_dir,
         results_limit,
         query_limit,
     ));
-    let static_path = path("static").and(warp::fs::dir("static"));
+    let static_path =
+        path("static").and(warp::fs::dir(args.static_dir.clone()));
     let log = warp::log::custom(|info| {
         log::info!(
             target: "all",
@@ -71,15 +137,12 @@ async fn main() {
     let route = route
         .and(
             redirect::add_slash_if_no_extension().or(warp::path::end()
-                .and(warp::fs::file("static/index.html"))
+                .and(warp::fs::file(args.static_dir.join("index.html")))
                 .or(static_path)
                 .or(ipa_path)
                 .or(templates_path)),
         )
         .recover(print_err)
         .with(log);
-    let port: u16 = std::env::var("PORT")
-        .map(|s| s.parse().expect("could not parse PORT variable"))
-        .unwrap_or(3030);
-    warp::serve(route).run(([0, 0, 0, 0], port)).await;
+    warp::serve(route).run(([0, 0, 0, 0], args.port)).await;
 }

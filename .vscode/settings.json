@@ -1,6 +1,7 @@
 {
     "files.watcherExclude": {
-        "**/cbor/*": true,
-        "**/entries/*": true
+        "**/cbor/**": true,
+        "**/entries/**": true,
+        "**/target/doc/**": true
     }
 }

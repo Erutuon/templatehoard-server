@@ -1,11 +1,11 @@
 use crate::ipa::LangsErr;
-use regex::Error as RegexError;
 use itertools::Itertools;
-use std::fmt::{Display, Formatter, Result as FmtResult};
-use std::{sync::Arc, io::Error as IoError};
-use warp::reject::Reject;
+use regex::Error as RegexError;
 use serde_cbor::Error as CborError;
 use serde_json::Error as JsonError;
+use std::fmt::{Display, Formatter, Result as FmtResult};
+use std::{io::Error as IoError, sync::Arc};
+use warp::reject::Reject;
 
 #[derive(Debug, Clone)]
 pub enum Error {
@@ -19,11 +19,17 @@ pub enum Error {
     UnusedMatcher,
     BothStringAndRegex,
     JsonError(String),
-    TemplateDumpNotFound { template: String, error: Arc<IoError> },
+    TemplateDumpNotFound {
+        template: String,
+        error: Arc<IoError>,
+    },
 }
 
 impl Error {
-    pub fn template_dump_not_found(template: impl Into<String>, error: impl Into<Arc<IoError>>) -> Error {
+    pub fn template_dump_not_found(
+        template: impl Into<String>,
+        error: impl Into<Arc<IoError>>,
+    ) -> Error {
         let template = template.into();
         let error = error.into();
         Self::TemplateDumpNotFound { template, error }

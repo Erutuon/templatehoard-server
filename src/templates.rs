@@ -7,12 +7,11 @@ use std::{
     collections::HashMap,
     convert::{Infallible, TryFrom},
     num::NonZeroUsize,
+    path::{Path, PathBuf},
+    sync::Arc,
 };
 use unicase::UniCase;
-use warp::{
-    self, http::StatusCode, reply::html, Filter, Rejection,
-    Reply,
-};
+use warp::{self, http::StatusCode, reply::html, Filter, Rejection, Reply};
 
 use crate::common::{
     mmap_file, RegexWrapper, SearchResults, TemplateBorrowed, TemplatesInPage,
@@ -249,11 +248,17 @@ fn do_search<'iter, 'template: 'iter, 'matcher: 'iter>(
     })
 }
 
-fn filter_templates_by_parameter(args: Args) -> Result<String, Error> {
-    let cbor_path = format!("cbor/{}.cbor", &args.template_name);
-    let text = mmap_file(&cbor_path).map_err(|e| {
-        Error::template_dump_not_found(&args.template_name, e)
-    })?;
+fn filter_templates_by_parameter(
+    args: Args,
+    cbor_dir: impl AsRef<Path>,
+) -> Result<String, Error> {
+    let cbor_path = {
+        let mut p = cbor_dir.as_ref().join(&args.template_name);
+        p.set_extension("cbor");
+        p
+    };
+    let text = mmap_file(&cbor_path)
+        .map_err(|e| Error::template_dump_not_found(&args.template_name, e))?;
 
     let mut pages = Deserializer::from_slice(&text).into_iter();
 
@@ -274,7 +279,7 @@ fn filter_templates_by_parameter(args: Args) -> Result<String, Error> {
 
 fn print_err(
     err: Rejection,
-    search_page_path: &str,
+    search_page_path: &'_ Path,
     max_query_len: NonZeroUsize,
 ) -> Result<impl Reply, Infallible> {
     use std::borrow::Cow::*;
@@ -326,18 +331,21 @@ fn print_err(
 static REDIRECTS: OnceCell<Option<HashMap<String, String>>> = OnceCell::new();
 
 pub fn handler<'a>(
-    search_page_path: &'a str,
-    template_redirect_filepath: &'a str,
+    search_page_path: PathBuf,
+    template_redirect_filepath: Option<PathBuf>,
+    cbor_dir: PathBuf,
     max_limit: NonZeroUsize,
     max_query_len: NonZeroUsize,
 ) -> impl Filter<Extract = (impl Reply,), Error = Infallible> + Clone + 'a {
+    let cbor_dir = cbor_dir.into();
+    let search_page_path = search_page_path.into();
     // Expects file in JSON format with template names and the redirects
     // that point to them (without the namespace prefix):
     // { "template name": [ "redirect 1", "redirect 2", ... ], ...}.
     let template_redirects: &Option<HashMap<String, String>> = REDIRECTS
         .get_or_init(|| {
             let text =
-                std::fs::read_to_string(template_redirect_filepath).ok()?;
+                std::fs::read_to_string(template_redirect_filepath?).ok()?;
             let target_to_redirects: HashMap<String, Vec<String>> =
                 serde_json::from_str(&text).ok()?;
             Some(
@@ -370,26 +378,30 @@ pub fn handler<'a>(
                 Args::try_from(params).map_err(warp::reject::custom)
             }
         })
-        .and_then(move |args| async move {
-            log::info!(
-                target: "all",
-                "{:?}",
-                &args,
-            );
+        .and_then(move |args| {
+            let cbor_dir = Arc::clone(&cbor_dir);
+            async move {
+                log::info!(
+                    target: "all",
+                    "{:?}",
+                    &args,
+                );
 
-            filter_templates_by_parameter(args)
-                .map(|json| {
-                    html(
-                        Page {
-                            title: "Template search results",
-                            json,
-                        }
-                        .to_string(),
-                    )
-                })
-                .map_err(warp::reject::custom)
+                filter_templates_by_parameter(args, &Arc::clone(&cbor_dir))
+                    .map(|json| {
+                        html(
+                            Page {
+                                title: "Template search results",
+                                json,
+                            }
+                            .to_string(),
+                        )
+                    })
+                    .map_err(warp::reject::custom)
+            }
         })
-        .recover(move |e| async move {
-            print_err(e, search_page_path, max_query_len)
+        .recover(move |e| {
+            let search_page_path = Arc::clone(&search_page_path);
+            async move { print_err(e, &search_page_path, max_query_len) }
         })
 }
