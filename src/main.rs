@@ -1,4 +1,3 @@
-use env_logger;
 use getopts::Options;
 use log;
 use std::{
@@ -109,10 +108,25 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Args {
     }
 }
 
+fn set_logger() -> Result<(), fern::InitError> {
+    fern::Dispatch::new()
+        .format(|out, message, record| {
+            out.finish(format_args!(
+                "{}[{}][{}] {}",
+                chrono::Local::now().format("[%Y-%m-%d][%H:%M:%S]"),
+                record.target(),
+                record.level(),
+                message,
+            ))
+        })
+        .apply()?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
-    env_logger::init();
     let args = parse_args(std::env::args().skip(1));
+    set_logger().expect("failed to set logger");
     let route = warp::get();
     let results_limit = NonZeroUsize::new(500).unwrap();
     let query_limit = NonZeroUsize::new(256).unwrap();
