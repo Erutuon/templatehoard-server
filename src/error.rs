@@ -1,4 +1,3 @@
-use crate::ipa::LangsErr;
 use itertools::Itertools;
 use regex::Error as RegexError;
 use serde_cbor::Error as CborError;
@@ -12,13 +11,13 @@ pub enum Error {
     MissingParameters(&'static [&'static str]),
     TooLong(&'static str),
     LangsErr(String),
-    RegexError(RegexError),
-    CborError(String),
+    Regex(RegexError),
+    Cbor(String),
     NoLimit,
     MissingTemplate,
     UnusedMatcher,
     BothStringAndRegex,
-    JsonError(String),
+    Json(String),
     TemplateDumpNotFound {
         template: String,
         error: Arc<IoError>,
@@ -38,27 +37,21 @@ impl Error {
 
 impl Reject for Error {}
 
-impl From<LangsErr> for Error {
-    fn from(LangsErr(chars): LangsErr) -> Self {
-        Error::LangsErr(chars)
-    }
-}
-
 impl From<RegexError> for Error {
     fn from(err: RegexError) -> Self {
-        Error::RegexError(err)
+        Error::Regex(err)
     }
 }
 
 impl From<CborError> for Error {
     fn from(err: CborError) -> Self {
-        Error::CborError(err.to_string())
+        Error::Cbor(err.to_string())
     }
 }
 
 impl From<JsonError> for Error {
     fn from(err: JsonError) -> Self {
-        Error::JsonError(err.to_string())
+        Error::Json(err.to_string())
     }
 }
 
@@ -81,8 +74,8 @@ impl Display for Error {
                 r#"The "langs" parameter contains the following bad characters: "{}"."#,
                 chars
             ),
-            RegexError(e) => write!(f, "{}", e),
-            CborError(e) => write!(f, "{}", e),
+            Regex(e) => write!(f, "{}", e),
+            Cbor(e) => write!(f, "{}", e),
             NoLimit => write!(f, "A limit is required."),
             MissingTemplate => write!(
                 f,
@@ -93,7 +86,7 @@ impl Display for Error {
                 "“search”, or “regex” will not be used because “parameter” is not present."
             ),
             BothStringAndRegex => write!(f, "Choose either “search” or “regex”."),
-            JsonError(e) => write!(f, "{}", e),
+            Json(e) => write!(f, "{}", e),
             TemplateDumpNotFound { template, .. } => write!(
                 f,
                 "The template {{{{{template}}}}} has not been dumped.",

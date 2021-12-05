@@ -1,6 +1,4 @@
-use env_logger;
 use getopts::Options;
-use log;
 use std::{
     convert::Infallible, fmt, num::NonZeroUsize, path::PathBuf, process::exit,
 };

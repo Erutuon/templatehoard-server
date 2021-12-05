@@ -1,8 +1,6 @@
-use log;
 use once_cell::sync::OnceCell;
 use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
 use serde_cbor::{Deserializer, Result as CborResult};
-use serde_json;
 use std::{
     collections::HashMap,
     convert::{Infallible, TryFrom},
@@ -299,7 +297,7 @@ fn print_err(
                     std::fs::read_to_string(&search_page_path)
                 {
                     status = Some(StatusCode::OK);
-                    HTML(Owned(search_page))
+                    Html(Owned(search_page))
                 } else {
                     status = Some(StatusCode::INTERNAL_SERVER_ERROR);
                     Text(Borrowed("Internal server error\n"))

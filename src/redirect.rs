@@ -1,4 +1,3 @@
-use log;
 use std::str::FromStr;
 use warp::{
     http::{uri::InvalidUri, Uri},
@@ -25,8 +24,7 @@ fn ends_in_slash_and_alpha(s: &str) -> bool {
     !s.ends_with('/')
         && s.bytes()
             .rev()
-            .skip_while(|b| b.is_ascii_alphabetic())
-            .next()
+            .find(|b| b.is_ascii_alphabetic())
             == Some(b'/')
 }
 

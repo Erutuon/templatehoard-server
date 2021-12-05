@@ -53,8 +53,8 @@ markup::define! {
                             .bytes()
                             .flat_map(|b| {
                                 match b {
-                                    b'<' => EitherIter::First(b"&lt;".into_iter().copied()),
-                                    b'&' => EitherIter::First(b"&amp;".into_iter().copied()),
+                                    b'<' => EitherIter::First(b"&lt;".iter().copied()),
+                                    b'&' => EitherIter::First(b"&amp;".iter().copied()),
                                     b => EitherIter::Second(std::iter::once(b)),
                                 }
                             })

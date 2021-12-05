@@ -1,4 +1,3 @@
-use regex::Regex;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_cbor::Deserializer;
 use std::{
@@ -20,6 +19,7 @@ use crate::common::{
 };
 use crate::error::Error;
 use crate::html::Page;
+use regex::Regex;
 
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
@@ -57,7 +57,7 @@ impl Query {
 
 #[derive(Serialize, Debug)]
 struct Args {
-    langs: Option<Langs>,
+    langs: Option<LanguageSet>,
     search: Option<String>,
     regex: Option<RegexWrapper>,
     limit: NonZeroUsize,
@@ -65,9 +65,9 @@ struct Args {
 }
 
 #[derive(Debug, Clone)]
-struct Langs(BTreeSet<String>);
+struct LanguageSet(BTreeSet<String>);
 
-impl Langs {
+impl LanguageSet {
     fn is_valid_char(c: char) -> bool {
         ('a'..='z').contains(&c) || c == '-' || c == ','
     }
@@ -81,16 +81,14 @@ impl Langs {
     }
 }
 
-pub struct LangsErr(pub String);
-
-impl FromStr for Langs {
-    type Err = LangsErr;
+impl FromStr for LanguageSet {
+    type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut bad_chars =
-            s.chars().filter(|c| !Langs::is_valid_char(*c)).peekable();
+            s.chars().filter(|c| !LanguageSet::is_valid_char(*c)).peekable();
         if bad_chars.peek().is_some() {
-            Err(LangsErr(bad_chars.collect()))
+            Err(Error::LangsErr(bad_chars.collect()))
         } else {
             let langs = s
                 .split(',')
@@ -102,12 +100,12 @@ impl FromStr for Langs {
                     }
                 })
                 .collect();
-            Ok(Langs(langs))
+            Ok(LanguageSet(langs))
         }
     }
 }
 
-impl Serialize for Langs {
+impl Serialize for LanguageSet {
     // Serialize as a comma-separated list.
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -150,10 +148,8 @@ impl TryFrom<Query> for Args {
     type Error = Error;
 
     fn try_from(query: Query) -> Result<Self, Self::Error> {
-        use Error::*;
-
         if !query.is_some() {
-            Err(MissingParameters(&["langs", "search", "regex", "limit"]))
+            Err(Error::MissingParameters(&["langs", "search", "regex", "limit"]))
         } else {
             let Query {
                 mut langs,
@@ -170,11 +166,11 @@ impl TryFrom<Query> for Args {
             let limit = if let Some(l) = limit {
                 l
             } else {
-                return Err(NoLimit);
+                return Err(Error::NoLimit);
             };
 
             let langs = langs
-                .map(|s| s.parse::<Langs>())
+                .map(|s| s.parse::<LanguageSet>())
                 .transpose()?
                 .filter(|l| !l.is_empty());
             let regex =
@@ -247,7 +243,7 @@ fn ipa_search_results<'iter, 'template: 'iter, 'matcher: 'iter>(
     deserializer: &'iter mut (impl Iterator<
         Item = serde_cbor::Result<TemplatesInPage<'template>>,
     > + 'iter),
-    langs: &'matcher Option<Langs>,
+    langs: &'matcher Option<LanguageSet>,
     search: &'matcher Option<String>,
     regex: &'matcher Option<RegexWrapper>,
 ) -> impl Iterator<Item = serde_cbor::Result<TitleAndTemplates<'template>>> + 'iter
@@ -263,7 +259,7 @@ fn ipa_search_results<'iter, 'template: 'iter, 'matcher: 'iter>(
         val.as_ref()
             .map(|s| {
                 template.parameters.iter().skip(1).any(|(k, v)| {
-                    k.bytes().all(|c| c.is_ascii_digit()) && filter(&s, &v)
+                    k.bytes().all(|c| c.is_ascii_digit()) && filter(s, v)
                 })
             })
             .unwrap_or(true)
@@ -280,10 +276,10 @@ fn ipa_search_results<'iter, 'template: 'iter, 'matcher: 'iter>(
                     .unwrap_or(false)
             })
             .unwrap_or(true)
-            && any_transcription(&search, &template, |search, tr| {
+            && any_transcription(search, template, |search, tr| {
                 tr.contains(search)
             })
-            && any_transcription(&regex, &template, |regex, tr| {
+            && any_transcription(regex, template, |regex, tr| {
                 regex.is_match(tr)
             })
     };
@@ -347,7 +343,7 @@ async fn print_err(
                     std::fs::read_to_string(&search_page_path)
                 {
                     status = Some(StatusCode::OK);
-                    HTML(Owned(search_page))
+                    Html(Owned(search_page))
                 } else {
                     status = Some(StatusCode::INTERNAL_SERVER_ERROR);
                     Text(Borrowed("Internal server error\n"))
@@ -419,7 +415,7 @@ pub fn handler(
                             .to_string(),
                         )
                     })
-                    .map_err(|e| warp::reject::custom(e))
+                    .map_err(warp::reject::custom)
             }
         })
         .recover(move |e| {

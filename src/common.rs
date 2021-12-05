@@ -182,14 +182,14 @@ pub fn mmap_file(path: &Path) -> IoResult<Mmap> {
 }
 
 pub enum TextOrHTML<S: Into<String>> {
-    HTML(S),
+    Html(S),
     Text(S),
 }
 
 impl<S: Into<String> + Send> Reply for TextOrHTML<S> {
     fn into_response(self) -> warp::reply::Response {
         match self {
-            Self::HTML(s) => html(s.into()).into_response(),
+            Self::Html(s) => html(s.into()).into_response(),
             Self::Text(s) => s.into().into_response(),
         }
     }
